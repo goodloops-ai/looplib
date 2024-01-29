@@ -21,7 +21,7 @@ export class Workflow {
             db.nodes
                 .upsert({
                     id,
-                    process: "./flow.mjs",
+                    process: "looplib/modules/flow.mjs",
                 })
                 .then((program) => {
                     this.program = program;
@@ -42,7 +42,7 @@ export class Workflow {
             return db.nodes.upsert({
                 id,
                 flow: this.program.id,
-                process: "./gpt.mjs",
+                process: "looplib/modules/gpt.mjs",
                 config: {
                     ...config,
                     prompt,
@@ -60,7 +60,7 @@ export class Workflow {
                 flow: this.program.id,
                 source,
                 target,
-                connect: guard ? "./gpt.mjs" : undefined,
+                connect: guard ? "looplib/modules/gpt.mjs" : undefined,
                 config: guard
                     ? {
                           prompt: guard,
