@@ -1,0 +1,7 @@
+{
+	"name": "chat-gpt",
+	"description": "Chat with GPT",
+	"version": "1.0.0",
+	"type": "process",
+	"draft": false
+}

@@ -1,0 +1,13 @@
+{
+    "lib": ["esnext"],
+    "imports": {
+        "rxjs": "https://esm.sh/rxjs",
+        "rxdb": "https://esm.sh/rxdb@15",
+        "rxdb/": "https://esm.sh/rxdb@15/",
+        "fast-equals": "https://esm.sh/fast-equals",
+        "zod-to-json-schema": "https://esm.sh/zod-to-json-schema",
+        "zod": "https://esm.sh/zod",
+        "uuid": "https://esm.sh/uuid",
+        "openai": "https://deno.land/x/openai@v4.20.1/mod.ts"
+    }
+}
