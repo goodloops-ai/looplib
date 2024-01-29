@@ -315,6 +315,7 @@
     "https://esm.sh/ajv": "https://esm.sh/ajv@8.12.0",
     "https://esm.sh/ajv-formats": "https://esm.sh/ajv-formats@2.1.1",
     "https://esm.sh/fast-equals": "https://esm.sh/fast-equals@5.0.1",
+    "https://esm.sh/gh/goodloops-ai/looplib/sdk.demo.mjs": "https://esm.sh/gh/goodloops-ai/looplib@7b9bd3c61f/sdk.demo.mjs",
     "https://esm.sh/ink@4": "https://esm.sh/ink@4.4.1",
     "https://esm.sh/react@17": "https://esm.sh/react@17.0.2",
     "https://esm.sh/react@18": "https://esm.sh/react@18.2.0",
@@ -382,6 +383,7 @@
     "https://esm.sh/ajv-formats@2.1.1": "575b3830618970ddc3aba96310bf4df7358bb37fcea101f58b36897ff3ac2ea7",
     "https://esm.sh/ajv@8.12.0": "762762b07884fa5db0c40eec3026ae5a25b9fa9f6ac76cc721dda9e4a70adc82",
     "https://esm.sh/fast-equals@5.0.1": "71c8d0302ed0b6bc16137b421c385061fb17d1f24e78e223419f87541c854f6e",
+    "https://esm.sh/gh/goodloops-ai/looplib@7b9bd3c61f/sdk.demo.mjs": "64fe9fc94c02bb31bbaaa72dc7a89cb4bf426aae41ebd980b8005a5f102b8283",
     "https://esm.sh/ink@3.2.0": "f1d26c2a4e0f1f5e308ce4b3956bfc2d7109969a670e66af65aa84d051ee0b18",
     "https://esm.sh/ink@4.4.0": "42bf06b3454980b28b1afc4a61038c0877f0b56e4dbe83e92776df046333e446",
     "https://esm.sh/ink@4.4.1": "ea1160cd5d31ac1e7388f203a6eada688bbca09554d2441e34882070230596af",
@@ -445,6 +447,17 @@
     "https://esm.sh/v135/@babel/runtime@7.23.8/denonext/helpers/esm/typeof.js": "3969698ba440234750118021f3204ad6130dcf42167125924d664bdb325dec74",
     "https://esm.sh/v135/@babel/runtime@7.23.8/denonext/helpers/inheritsLoose.js": "f09ba117f877f9e1fb79059868a93473467235f7a8bc5698ac9d1bd58eef0a34",
     "https://esm.sh/v135/@babel/runtime@7.23.8/denonext/helpers/wrapNativeSuper.js": "dfb709dadf10dfeb3ab8dbc5811f1733b4d2280f8b3f9f02052ed3fa4a638f8e",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/createClass.js": "839c86f2e261887206490a45e69de8c0d71fcd2f69a9ba6c8daf69da70a3800b",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/construct.js": "037d4cb1635eddfcff96ed7e5fb71673a72bbc6a26b1a10694a312c2495afef5",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/getPrototypeOf.js": "3dee8d089163759c4b09e8f328f774258ad4ebf4ce90e189f8de6631d46696ab",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/isNativeFunction.js": "f633cf34f51f8bd09802260414ddd47038266a4febb38d826607c8687f6a45c9",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/isNativeReflectConstruct.js": "5b2e23e6aa7d4e273d88a02f1495b2765595858f253a2f4c1dd6609f71e57c08",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/setPrototypeOf.js": "61d7f7df2fca51276b3a73e19d6166f2ae31c5e075d983187613d6d564acbaba",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/toPrimitive.js": "47f4a40c305fde67c7902daf1038721188308cabda315e53963caca9e6c38ca0",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/toPropertyKey.js": "437e35f49472b2d847cb012b0a3102cbe858e96dcb846f20728c86ff433d73b3",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/typeof.js": "e813e8e9567f540f34744c10249c7259e66b67b9032ea28e55c062b52d570f61",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/inheritsLoose.js": "96c503fde5639f1244bc8ad7826a06021c69cce2059b43aa1873c37784d936b9",
+    "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/wrapNativeSuper.js": "0cc61e3aea69f58466c93449581df2f6bce5ccae998ed47dfe73a5e2abf6af7f",
     "https://esm.sh/v135/ajv-formats@2.1.1/denonext/ajv-formats.mjs": "06092e00b42202633ae6dab4b53287c133af882ddb14c6707277cdb237634967",
     "https://esm.sh/v135/ajv@8.12.0/denonext/ajv.mjs": "4645df9093d0f8be0e964070a4a7aea8adea06e8883660340931f7a3f979fc65",
     "https://esm.sh/v135/ajv@8.12.0/denonext/dist/compile/codegen.js": "d981238e5b1e78217e1c6db59cbd594369279722c608ed630d08717ee44edd84",
@@ -487,6 +500,8 @@
     "https://esm.sh/v135/escape-string-regexp@2.0.0/denonext/escape-string-regexp.mjs": "17f1492893f456f5b1d4b34b094f7f98d7da66f5e54ae61cd660b82ec042c852",
     "https://esm.sh/v135/event-reduce-js@5.2.7/denonext/event-reduce-js.mjs": "22cbb0aec63f4f21fa9b6302e0bce51a9760e5db859d8f83ccc450945c5e635c",
     "https://esm.sh/v135/fast-deep-equal@3.1.3/denonext/fast-deep-equal.mjs": "6313b3e05436550e1c0aeb2a282206b9b8d9213b4c6f247964dd7bb4835fb9e5",
+    "https://esm.sh/v135/fast-equals@2.0.4/denonext/fast-equals.mjs": "d5786b030efae58b6908a58f5172abe64ccb084197a77eb7419eae06d3acea6a",
+    "https://esm.sh/v135/gh/goodloops-ai/looplib@7b9bd3c61f/denonext/sdk.demo.js": "4a1b03a927e2e9313ae291bd5b6926862900b2cbb0e6043bddf04d54d9ac882c",
     "https://esm.sh/v135/indent-string@4.0.0/denonext/indent-string.mjs": "de4038b836a42fe2a7c453bd0b44cdae706a9560bbef99b1857c13f9d55ace14",
     "https://esm.sh/v135/indent-string@5.0.0/denonext/indent-string.mjs": "8daccc9d45d018c7da7f17c76cf1b4ffd61de4dd7c06537e5930ff9c3386e676",
     "https://esm.sh/v135/ink@3.2.0/denonext/ink.mjs": "d9862245366fded59ff71ba9c46b96cb2910b756090b0ffb10e2ee5a67fe39f0",
@@ -546,6 +561,13 @@
     "https://esm.sh/v135/rxdb@15.4.2/denonext/plugins/storage-memory.js": "73e35008742ecfb7b18aa20a2b54bc6dab94046029ccad124b7d2feb5db6c9a0",
     "https://esm.sh/v135/rxdb@15.4.2/denonext/plugins/utils.js": "fa6f8d0d8e846f9901ecec5b88bf175b5303451948b225c7bab7276cdb34a709",
     "https://esm.sh/v135/rxdb@15.4.2/denonext/rxdb.mjs": "b067eebbf0ed9406adc4f59f67e86b89d7a1b095bf75103b119ac44ee59524f4",
+    "https://esm.sh/v135/rxdb@15.4.3/denonext/plugins/attachments.js": "e745c83594cea14d986f2b4936ccd097398238f7db467bc743dde778ffa64453",
+    "https://esm.sh/v135/rxdb@15.4.3/denonext/plugins/dev-mode.js": "9f9de749ff27d9c498b67d460cfd533063dbb4d53b051d9d1b074e98014dd628",
+    "https://esm.sh/v135/rxdb@15.4.3/denonext/plugins/local-documents.js": "191665d40b9295b1579797e1cad72a419a72f063a57b443c9ae99b678f0fc847",
+    "https://esm.sh/v135/rxdb@15.4.3/denonext/plugins/storage-dexie.js": "76b4212ffc3b245bfea72beddc693d4cf63e547b3896fd6b05a483f877006e62",
+    "https://esm.sh/v135/rxdb@15.4.3/denonext/plugins/storage-memory.js": "f4b12b62621ebf793ddcbbd60ea9d15c5e8d2425c1f6ab29fedc963d055a1fee",
+    "https://esm.sh/v135/rxdb@15.4.3/denonext/plugins/utils.js": "d79156a6c9392bf36b7830bf35eae63ad5bc716d56711a9ac4452fec8c14e4bf",
+    "https://esm.sh/v135/rxdb@15.4.3/denonext/rxdb.mjs": "e14799cee6a5df43dd45608952d702f503dc32ae5fb71b43bab5e11b7834d173",
     "https://esm.sh/v135/rxjs@7.8.1/denonext/operators.js": "fb63dd98528ca34cba49b9eeac4d8d0a6c67cd335110460c070f9d0fa1e3532b",
     "https://esm.sh/v135/rxjs@7.8.1/denonext/rxjs.mjs": "5b7ef4f0e05f81c90bb2fdf37ac4c2c2f30680a8fe90aa6b716750dd901529ca",
     "https://esm.sh/v135/scheduler@0.20.2/denonext/scheduler.mjs": "22e03c34630e36d4841aebe299bd33b20732e01b7414bb00131f380c1fff2612",
@@ -564,6 +586,7 @@
     "https://esm.sh/v135/unload@2.4.1/denonext/unload.mjs": "7880822d42c4303cd67b70dc1431342310f07a7e3a1fb080002bee65bc46da65",
     "https://esm.sh/v135/uri-js@4.4.1/denonext/uri-js.mjs": "901d462f9db207376b39ec603d841d87e6b9e9568ce97dfaab12aa77d0f99f74",
     "https://esm.sh/v135/utf-8-validate@6.0.3/denonext/utf-8-validate.mjs": "410c48d66840e987e474a4849cd25829817415cedd25466280effb1287d05aa5",
+    "https://esm.sh/v135/uuid@8.3.2/denonext/uuid.mjs": "c0da38266b24ac79d62b02290f17caba7e75d078f6771bbe8fb61bdef60f837c",
     "https://esm.sh/v135/uuid@9.0.1/denonext/uuid.mjs": "7d7d3aa57fa136e2540886654c416d9da10d8cfebe408bae47fd47070f0bfb2a",
     "https://esm.sh/v135/wcwidth@1.0.1/denonext/wcwidth.mjs": "df03c601312ee4eb0ef3b12d6ea7cb7ab6a349b5bc9a1d00873b7753cd06b159",
     "https://esm.sh/v135/whiptail@2.0.4/denonext/whiptail.mjs": "0e95de0b9b8c37e15d96e77f04b91412e00a280a9db24a28dbe543837dc7355f",
@@ -579,14 +602,5 @@
     "https://esm.sh/v135/zod@3.22.4/denonext/zod.mjs": "660128af5d1e921745c4d452472d103d9f2fc5afa508bbf233b83d35a272ad67",
     "https://esm.sh/whiptail@2.0.4": "95b0d7752d6994f5986b711bbfe143f7cc156526b4a927b2cf872c05ffe71529",
     "https://esm.sh/zod@3.22.4": "f7bfaf7e78bc8fa39e67e07c0dacd651925e889f5a4ef02b3ef6bab3925a8384"
-  },
-  "workspace": {
-    "packageJson": {
-      "dependencies": [
-        "npm:cli-spinners@^2.9.2",
-        "npm:ink@^4.4.0",
-        "npm:react@^18.2.0"
-      ]
-    }
   }
 }

@@ -37,6 +37,7 @@ export class Workflow {
     }
 
     addNode(id, prompt, config = {}) {
+        console.log("import.meta.url", import.meta.url);
         this.jobs = this.jobs.then(() => {
             return db.nodes.upsert({
                 id,
