@@ -2,7 +2,7 @@
 
 ## Getting Started
 
-To use `looplib` in your Deno project, you need to include it in your `deno.json` file. 
+To use `looplib` in your Deno project, you need to include it in your `deno.json` file. It is important to include the entries for both `looblib` and `looplib/` in order for the library to work properly.
 
 Here is a basic example of how to do this:
 
