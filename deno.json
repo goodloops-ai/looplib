@@ -9,6 +9,7 @@
         "zod": "https://esm.sh/zod",
         "uuid": "https://esm.sh/uuid",
         "openai": "https://deno.land/x/openai@v4.20.1/mod.ts",
-        "looplib/": "./"
+        "looplib/": "./",
+        "schinquirer": "https://esm.sh/@luismayo/schinquirer"
     }
 }

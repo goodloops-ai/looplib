@@ -84,15 +84,17 @@ export class Workflow {
         for (const [id, node] of inputs) {
             // console.log(node);
             await node.incrementalPatch({
-                input: [
-                    {
-                        type: "message",
-                        data: {
-                            role: "user",
-                            content: prompt,
-                        },
-                    },
-                ],
+                input: prompt
+                    ? [
+                          {
+                              type: "message",
+                              data: {
+                                  role: "user",
+                                  content: prompt,
+                              },
+                          },
+                      ]
+                    : [],
             });
         }
 
