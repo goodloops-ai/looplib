@@ -117,7 +117,7 @@ export const connect = (program) =>
                         type: "function",
                         function: {
                             name: "answer_question",
-                            function: `runner.abort()`,
+                            function: `(parameters, runner) => runner.abort()`,
                             parse: `JSON.parse(args)`,
                             description:
                                 "invoke this function to answer the users question",
@@ -231,12 +231,27 @@ export const process = (program) => {
                         }) => ({
                             type,
                             function: {
-                                function: new Function(
-                                    "parameters",
-                                    "runner",
-                                    fnStr
-                                ),
-                                parse: new Function("args", pStr),
+                                function: async (parameters, runner) => {
+                                    console.log(
+                                        "got tool invokation",
+                                        parameters,
+                                        runner
+                                    );
+                                    const fn = new Function(
+                                        "parameters",
+                                        "runner",
+                                        `return (${fnStr})(parameters,runner)`
+                                    );
+
+                                    const res = await fn(parameters, runner);
+                                    console.log("result", res);
+                                    return res;
+                                },
+                                parse: (args) => {
+                                    console.log("got args", args);
+                                    const parse = new Function("args", pStr);
+                                    return JSON.parse(args);
+                                },
                                 ...def,
                             },
                         })
