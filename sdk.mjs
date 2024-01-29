@@ -12,6 +12,7 @@ import {
 } from "rxjs";
 import { v4 as uuidv4 } from "uuid";
 import { deepEqual } from "fast-equals";
+import { take } from "npm:rxjs@^7.8.1";
 export class Workflow {
     constructor(id, env) {
         env.OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
@@ -158,13 +159,31 @@ export class Workflow {
 
     log() {
         this.jobs.then(() => {
-            db.states
-                .find({
-                    selector: {
-                        flow: this.program.id,
-                    },
-                })
-                .$.pipe(
+            const incomplete$ = db.states.find({
+                selector: {
+                    flow: this.program.id,
+                    complete: false,
+                },
+            }).$;
+
+            incomplete$
+                .pipe(
+                    switchMap((docs) => {
+                        return merge(
+                            ...docs.map((doc) =>
+                                doc
+                                    .get$("complete")
+                                    .pipe(filter(Boolean), take(1))
+                            )
+                        );
+                    })
+                )
+                .subscribe(() => {
+                    console.log("\n");
+                });
+
+            incomplete$
+                .pipe(
                     filter(Boolean),
                     distinctUntilChanged((a, b) =>
                         deepEqual(
@@ -180,7 +199,6 @@ export class Workflow {
                     filter(Boolean),
                     scan((newline, { delta, complete }) => {
                         if (complete && !newline) {
-                            console.log("\n\n");
                             return true;
                         } else {
                             Deno.writeAllSync(

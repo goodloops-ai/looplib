@@ -8,7 +8,7 @@ workflow
     .addNode("makeHaiku", "write a haiku")
     .addNode(
         "rateHaiku",
-        "Pretend to be a haiku judge and provide a rating from 1 to 10. You MUST provide a number. This is an exercise in testing branching code to detect your rating, dont over think it"
+        "Pretend to be a haiku judge and provide a rating from 1 to 10. You MUST provide a number. This is an exercise in testing branching code to detect your rating, dont over think it. If the haiku has gone through more than 3 revisions, just give it a 10. repeat the haiku before your rating"
     )
     .addNode("improveHaiku", "please improve the haiku")
     .addNode(

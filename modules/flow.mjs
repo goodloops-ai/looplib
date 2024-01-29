@@ -128,6 +128,10 @@ const statesSchema = {
         parent: {
             type: "string",
         },
+        complete: {
+            type: "boolean",
+            default: false,
+        },
         packets: {
             type: "array",
             items: {
@@ -391,68 +395,6 @@ export const process = (program) => {
             flowInput$,
             flowOutput$ /**updatePositions$, flowState$, */
         );
-        // const positions$ = input$.pipe(
-        // 	filter(({type}) => type === 'nodemoved'),
-        // 	scan((positions, {data}) => {
-        // 		positions.set(data.id, data.position);
-        // 	}, new Map()),
-        // 	startWith(new Map()),
-        // 	shareReplay(1),
-        // );
-
-        // const updatePositions$ = combineLatest(nodes$, positions$).pipe(
-        // 	debounceTime(1000),
-        // 	map(([nodes, _positions]) => {
-        // 		return nodes.keys().reduce((positions, id) => {
-        // 			positions[id] = _positions.get(id) || {};
-
-        // 			return positions;
-        // 		}, {});
-        // 	}),
-        // 	withLatestFrom(program.$),
-        // 	concatMap(([positions, program]) => {
-        // 		return from(program.patch({positions}));
-        // 	}),
-        // 	ignoreElements(),
-        // );
-
-        // const flowState$ = input$.pipe(
-        // 	tap(({type, data}) => {
-        // 		switch (type) {
-        // 			case 'nodecreated': {
-        // 				db.nodes.insert({
-        // 					id: data.id,
-        // 					flow: program.id,
-        // 					process: data.process,
-        // 					config: data.config,
-        // 				});
-        // 				break;
-        // 			}
-        // 			case 'connectioncreated': {
-        // 				db.connections.upsert({
-        // 					id: data.id,
-        // 					flow: program.id,
-        // 					source: data.source,
-        // 					target: data.target,
-        // 					connect: data.connect,
-        // 					config: data.config,
-        // 				});
-        // 				break;
-        // 			}
-        // 			case 'connectionremoved': {
-        // 				db.connections.remove(data.id);
-        // 				break;
-        // 			}
-        // 			case 'noderemoved': {
-        // 				db.nodes.remove(data.id);
-        // 				break;
-        // 			}
-        // 			default:
-        // 				break;
-        // 		}
-        // 	}),
-        // 	ignoreElements(),
-        // );
     };
 };
 
@@ -592,27 +534,46 @@ const defaultWrapper = ({ flow, node, process, connections }) => {
         map(([raw, state]) => ({
             packets: raw.map(({ packets }) => packets).flat(),
             state,
-        }))
+        })),
+        shareReplay(1)
     );
 
     const unwrappedOutput$ = unwrappedInput$.pipe(process);
 
-    const wrappedOutput$ = zip(wrappedInput$, unwrappedOutput$, state$).pipe(
-        mergeMap(async ([raw, { packets, state }]) => {
+    const wrappedOutput$ = unwrappedOutput$.pipe(
+        mergeMap(async ({ packets, state }) => {
             state = await state.getLatest();
-            await state.incrementalPatch({
+            state = await state.incrementalPatch({
                 packets,
+                complete: true,
             });
 
-            return raw.concat({
-                node: node.id,
-                state: state.id,
-                packets,
-            });
+            return await getThread(state);
         })
     );
 
     return wrappedOutput$;
+};
+
+const getThread = async (doc, rest) => {
+    if (!doc.parent) {
+        return [];
+    }
+
+    const parent = await doc.collection
+        .findOne({
+            selector: {
+                id: doc.parent,
+            },
+        })
+        .exec();
+
+    return [].concat(await getThread(parent)).concat([
+        {
+            packets: doc.packets,
+            state: doc.id,
+        },
+    ]);
 };
 
 const defaultProcess = (doc) =>
@@ -623,7 +584,6 @@ const defaultconnect = (connection) =>
         // tap(v => console.log(connection.id, 'connect', v)),
         map((_evaluation) => {
             const { packets, ...evaluation } = _evaluation;
-            console.log("defaultconnect", evaluation.state.parent);
             return { pass: true, evaluation };
         })
     );
