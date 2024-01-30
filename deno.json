@@ -10,6 +10,7 @@
         "uuid": "https://esm.sh/uuid",
         "openai": "https://deno.land/x/openai@v4.20.1/mod.ts",
         "looplib/": "./",
-        "schinquirer": "https://esm.sh/@luismayo/schinquirer"
+        "schinquirer": "https://esm.sh/@luismayo/schinquirer",
+        "filenamify": "https://esm.sh/filenameify"
     }
 }

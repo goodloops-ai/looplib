@@ -232,11 +232,11 @@ export const process = (program) => {
                             type,
                             function: {
                                 function: async (parameters, runner) => {
-                                    console.log(
-                                        "got tool invokation",
-                                        parameters,
-                                        runner
-                                    );
+                                    // console.log(
+                                    //     "got tool invokation",
+                                    //     parameters,
+                                    //     runner
+                                    // );
                                     const fn = new Function(
                                         "parameters",
                                         "runner",
@@ -244,11 +244,11 @@ export const process = (program) => {
                                     );
 
                                     const res = await fn(parameters, runner);
-                                    console.log("result", res);
+                                    // console.log("result", res);
                                     return res;
                                 },
                                 parse: (args) => {
-                                    console.log("got args", args);
+                                    // console.log("got args", args);
                                     const parse = new Function("args", pStr);
                                     return JSON.parse(args);
                                 },
