@@ -74,7 +74,10 @@ export class Workflow {
     }
 
     async execute(prompt) {
-        await this.jobs;
+        await this.jobs.catch((e) => {
+            console.error(e);
+            Deno.exit(1);
+        });
 
         const inputs = await firstValueFrom(
             getIO(this.program).pipe(
