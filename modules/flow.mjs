@@ -17,12 +17,11 @@ import {
     concatMap,
     takeUntil,
     catchError,
-    debounceTime,
     startWith,
     ignoreElements,
     EMPTY,
     of,
-    skip,
+    mergeMap,
 } from "rxjs";
 import { createRxDatabase, addRxPlugin } from "rxdb";
 import { getRxStorageDexie } from "rxdb/plugins/storage-dexie";
@@ -34,7 +33,7 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 
 import { RxDBDevModePlugin } from "rxdb/plugins/dev-mode";
-import { mergeMap } from "npm:rxjs@^7.8.1";
+import { log } from "./logging.mjs";
 addRxPlugin(RxDBDevModePlugin);
 addRxPlugin(RxDBLocalDocumentsPlugin);
 
@@ -267,13 +266,15 @@ const createConnection = (doc, source) => {
         filter((operator) => operator !== undefined),
         importOperator(),
         map((mod) => mod.connect),
-        startWith(defaultconnect)
+        startWith(defaultconnect),
+        log(doc, "got connection operator")
     );
 
     const $ = connect$.pipe(
         switchMap((connect) => {
             return combineLatest(
                 source.$.pipe(
+                    log(doc, "got incoming thread"),
                     scan((threads, thread) => {
                         const parent = thread[thread.length - 1].state;
                         threads.set(parent, thread);
@@ -297,6 +298,7 @@ const createConnection = (doc, source) => {
                     connect(doc)
                 )
             ).pipe(
+                log(doc, "got evaluated guard"),
                 mergeMap(async ([threads, { pass, evaluation }]) => {
                     const thread = threads.get(evaluation.state.parent);
                     threads.delete(evaluation.state.parent);
@@ -406,14 +408,16 @@ const createNode = (flow, node, nodes$) => {
         filter((process) => process !== undefined),
         importOperator(),
         map((mod) => mod.default),
-        map((process) => process(node))
+        map((process) => process(node)),
+        log(node, "got process operator")
     );
 
     const wrapper$ = node.get$("wrapper").pipe(
         filter((wrapper) => wrapper !== undefined),
         importOperator(),
         map((mod) => mod.default),
-        startWith(defaultWrapper)
+        startWith(defaultWrapper),
+        log(node, "got wrapper operator")
     );
 
     const connections$ = db.connections
@@ -487,7 +491,7 @@ const defaultWrapper = ({ flow, node, process, connections }) => {
     const wrappedInput$ = merge(
         node.get$("input").pipe(
             filter(Boolean),
-
+            log(node, "got raw input"),
             distinctUntilChanged((a, b) => {
                 const equal = deepEqual(a, b);
                 return equal;
@@ -509,13 +513,10 @@ const defaultWrapper = ({ flow, node, process, connections }) => {
             })
         ),
         ...connections.values().map(({ $ }) => $)
-    ).pipe(
-        filter(Boolean),
-        // tap(v => console.log('wrapper input', v)),
-        shareReplay(1)
-    );
+    ).pipe(filter(Boolean), log(node, "wrapper input"), shareReplay(1));
 
     const state$ = wrappedInput$.pipe(
+        log(node, "wrappedInput$ to state$"),
         mergeMap(
             async (thread) =>
                 await db.states.upsert({
@@ -526,11 +527,12 @@ const defaultWrapper = ({ flow, node, process, connections }) => {
                     data: {},
                 })
         ),
+        log(node, "wrappedInput$ upserted state$"),
         shareReplay(1)
     );
 
     const unwrappedInput$ = zip(wrappedInput$, state$).pipe(
-        // tap(console.log.bind(console, "unwrappedToWrapped")),
+        log(node, "unwrappedToWrapped"),
         map(([raw, state]) => ({
             packets: raw.map(({ packets }) => packets).flat(),
             state,
@@ -541,6 +543,7 @@ const defaultWrapper = ({ flow, node, process, connections }) => {
     const unwrappedOutput$ = unwrappedInput$.pipe(process);
 
     const wrappedOutput$ = unwrappedOutput$.pipe(
+        log(node, "got unwrappedOutput"),
         mergeMap(async ({ packets, state }) => {
             state = await state.getLatest();
             state = await state.incrementalPatch({
@@ -549,7 +552,8 @@ const defaultWrapper = ({ flow, node, process, connections }) => {
             });
 
             return await getThread(state);
-        })
+        }),
+        log(node, "got thread to output")
     );
 
     return wrappedOutput$;
@@ -581,7 +585,7 @@ const defaultProcess = (doc) =>
 
 const defaultconnect = (connection) =>
     pipe(
-        // tap(v => console.log(connection.id, 'connect', v)),
+        log(connection, "doing default evaluation"),
         map((_evaluation) => {
             const { packets, ...evaluation } = _evaluation;
             return { pass: true, evaluation };
