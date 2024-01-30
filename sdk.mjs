@@ -13,6 +13,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { deepEqual } from "fast-equals";
 import { take } from "npm:rxjs@^7.8.1";
+import filenamify from "filenamify";
 export class Workflow {
     constructor(id, env) {
         env.OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
@@ -151,7 +152,7 @@ export class Workflow {
                     const json = JSON.stringify(thread, null, 2);
                     const encoder = new TextEncoder();
                     Deno.writeFileSync(
-                        `${path}-${sessionDate}.json`,
+                        `${path}-${filenamify(sessionDate)}.json`,
                         encoder.encode(json)
                     );
                 });
