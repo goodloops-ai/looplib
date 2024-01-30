@@ -152,7 +152,7 @@ export class Workflow {
                     const json = JSON.stringify(thread, null, 2);
                     const encoder = new TextEncoder();
                     Deno.writeFileSync(
-                        `${path}-${filenamify(sessionDate)}.json`,
+                        `${path}-${filenamify(sessionDate.toString())}.json`,
                         encoder.encode(json)
                     );
                 });
