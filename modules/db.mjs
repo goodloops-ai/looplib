@@ -7,7 +7,7 @@ import { RxDBDevModePlugin } from "rxdb/plugins/dev-mode";
 addRxPlugin(RxDBDevModePlugin);
 addRxPlugin(RxDBLocalDocumentsPlugin);
 
-const evaluationsSchema = {
+const evaluationSchema = {
     version: 0,
     type: "object",
     primaryKey: "id",
@@ -16,22 +16,23 @@ const evaluationsSchema = {
             type: "string",
             maxLength: 255,
         },
-        entity: {
+        node: {
             type: "string",
-            maxLength: 255,
-        },
-        connection: {
-            type: "string",
+            ref: "node",
             maxLength: 255,
         },
         flow: {
             type: "string",
             maxLength: 255,
         },
-        thread: {
-            type: "string",
+        parents: {
+            type: "array",
+            ref: "evaluation",
+            items: {
+                type: "string",
+            },
         },
-        data: {
+        state: {
             type: "object",
             additionalProperties: true,
         },
@@ -62,7 +63,7 @@ const evaluationsSchema = {
     indexes: ["flow", "entity"],
 };
 
-const nodesSchema = {
+const nodeSchema = {
     version: 0,
     type: "object",
     primaryKey: "id",
