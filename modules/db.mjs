@@ -1,4 +1,19 @@
-import { of, switchMap, combineLatest, map } from "rxjs";
+import {
+    of,
+    switchMap,
+    combineLatest,
+    map,
+    shareReplay,
+    distinct,
+    mergeMap,
+    filter,
+    from,
+    scan,
+    delay,
+    reduce,
+    withLatestFrom,
+    tap,
+} from "rxjs";
 
 import { Graph, alg } from "@dagrejs/graphlib";
 
@@ -7,6 +22,7 @@ import { getRxStorageDexie } from "rxdb/plugins/storage-dexie";
 import { getRxStorageMemory } from "rxdb/plugins/storage-memory";
 import { RxDBLocalDocumentsPlugin } from "rxdb/plugins/local-documents";
 import { RxDBDevModePlugin } from "rxdb/plugins/dev-mode";
+import { v4 as uuidv4 } from "uuid";
 addRxPlugin(RxDBDevModePlugin);
 addRxPlugin(RxDBLocalDocumentsPlugin);
 
@@ -72,6 +88,7 @@ const evaluationsSchema = {
     },
     required: ["id", "flow", "node"],
     indexes: ["flow", "node"],
+    statics: {},
 };
 
 const nodesSchema = {
@@ -143,10 +160,186 @@ const config = {
     dbName: "flowdb",
     collections: {
         nodes: {
-            schema: nodeSchema,
+            schema: nodesSchema,
+            methods: {
+                trigger$: function (session) {
+                    console.log("CALL TRIGGER", this.flow);
+                    const evaluations = this.collection.database.evaluations;
+                    const parents$ = this.get$("parents").pipe(shareReplay(1));
+                    const trees$ = evaluations
+                        .find({
+                            selector: {
+                                session,
+                                flow: this.flow,
+                                parents: {
+                                    $exists: false,
+                                },
+                            },
+                        })
+                        .$.pipe(
+                            switchMap((roots) =>
+                                from(roots).pipe(
+                                    tap((root) =>
+                                        console.log("got root", root.id)
+                                    ),
+                                    mergeMap(
+                                        (root) =>
+                                            evaluations.find({
+                                                selector: {
+                                                    root: root.id,
+                                                    complete: true,
+                                                },
+                                            }).$
+                                    ),
+                                    mergeMap((sameRoot) =>
+                                        from(sameRoot).pipe(
+                                            reduce((graph, evaluation) => {
+                                                graph.setNode(
+                                                    evaluation.id,
+                                                    evaluation
+                                                );
+                                                const parents =
+                                                    evaluation.parents || [];
+                                                for (const parent of parents) {
+                                                    graph.setEdge(
+                                                        evaluation.id,
+                                                        parent
+                                                    );
+                                                }
+                                                return graph;
+                                            }, new Graph())
+                                        )
+                                    ),
+                                    scan((all, graph) => {
+                                        console.log(
+                                            "add tree",
+                                            graph.nodes(),
+                                            graph.edges()
+                                        );
+                                        all.set(graph.sinks()[0], graph);
+                                        return all;
+                                    }, new Map())
+                                )
+                            ),
+                            shareReplay(1)
+                        );
+
+                    // return of(null);
+
+                    return parents$.pipe(
+                        switchMap(
+                            (ids) =>
+                                evaluations.find({
+                                    selector: {
+                                        session,
+                                        node: {
+                                            $in: ids,
+                                        },
+                                        complete: true,
+                                    },
+                                }).$
+                        ),
+                        mergeMap((newEvaluations) => from(newEvaluations)),
+                        tap((nEval) =>
+                            console.log("NEW EVAL, nEval.id", nEval.id)
+                        ),
+                        delay(100),
+                        withLatestFrom(trees$, parents$),
+                        // tap(
+                        //     console.log.bind(
+                        //         console,
+                        //         "got new, trees, and parents$"
+                        //     )
+                        // ),
+                        filter(([evaluation, trees]) => {
+                            console.log(
+                                "check trees for root",
+                                evaluation.root,
+                                trees
+                            );
+                            const tree = trees.get(evaluation.root);
+                            return tree.node(evaluation.id);
+                        }),
+                        map(([evaluation, trees, parents]) => {
+                            const tree = trees.get(evaluation.root);
+                            const mst = alg.prim(tree, () => 1);
+                            console.log(tree);
+                            const djk = alg.dijkstra(
+                                tree,
+                                evaluation.id,
+                                () => 1
+                            );
+                            const djkArray = Object.keys(djk)
+                                .map((k) => ({
+                                    to: k,
+                                    ...djk[k],
+                                }))
+                                .sort((a, b) => a.distance - b.distance);
+
+                            console.log(
+                                "djk array",
+                                evaluation.id,
+                                djkArray,
+                                alg.topsort(tree),
+                                alg.topsort(mst)
+                            );
+                            const triggers = new Map([
+                                [evaluation.node, evaluation],
+                            ]);
+                            for (const { to: evalId } of djkArray) {
+                                const evalNode = tree.node(evalId);
+                                if (
+                                    parents.includes(evalNode.node) &&
+                                    !triggers.has(evalNode.node)
+                                ) {
+                                    triggers.set(evalNode.node, evalNode);
+                                    if (
+                                        parents.every((parent) =>
+                                            triggers.has(parent)
+                                        )
+                                    ) {
+                                        break;
+                                    }
+                                }
+                            }
+                            console.log(
+                                "triggers",
+                                Array.from(
+                                    triggers.values().map(({ id }) => id)
+                                )
+                            );
+                            return [evaluation, triggers, parents];
+                        }),
+                        filter(([_, triggers, parents]) =>
+                            parents.every((p) => triggers.has(p))
+                        ),
+                        distinct(([_, triggers]) =>
+                            JSON.stringify(
+                                Array.from(
+                                    triggers.values().map(({ id }) => id)
+                                ).sort()
+                            )
+                        ),
+
+                        mergeMap(([evaluation, triggers]) =>
+                            evaluations.upsert({
+                                id: uuidv4(),
+                                root: evaluation.root,
+                                flow: this.flow,
+                                node: this.id,
+                                session,
+                                parents: Array.from(
+                                    triggers.values().map(({ id }) => id)
+                                ),
+                            })
+                        ),
+                        mergeMap((newEval) => partial(newEval))
+                    );
+                },
+            },
         },
         evaluations: {
-            schema: evaluationSchema,
+            schema: evaluationsSchema,
         },
     },
 };
@@ -240,9 +433,11 @@ const partial = async (output, graph = new Graph()) => {
 
     await Promise.all(proms);
 
-    return Promise.all(
-        alg.topsort(graph).map((id) => graph.node(id).getLatest())
-    );
+    return (
+        await Promise.all(
+            alg.topsort(graph).map((id) => graph.node(id).getLatest())
+        )
+    ).map((n) => n.toJSON());
 };
 
 const shouldInclude = async (doc, ancestorId, depth = 0) => {
@@ -266,43 +461,102 @@ const shouldInclude = async (doc, ancestorId, depth = 0) => {
     ).reduce((found, path) => found || path, false);
 };
 
-await db.evaluation.bulkUpsert([
+const flowid = "FLOW";
+const session = new Date().toDateString();
+
+await db.evaluations.bulkUpsert([
     {
         id: "A",
+        node: "node_A",
         root: "A",
         complete: true,
+        flow: flowid,
+        session: session,
     },
     {
         id: "B",
+        node: "node_B",
         root: "A",
         parents: ["A"],
         complete: true,
+        flow: flowid,
+        session: session,
     },
     {
         id: "C",
+        node: "node_C",
         root: "A",
         parents: ["A"],
         complete: true,
+        flow: flowid,
+        session: session,
     },
     {
         id: "D",
+        node: "node_D",
         root: "A",
         parents: ["B", "C"],
         complete: true,
+        flow: flowid,
+        session: session,
     },
     {
         id: "E",
+        node: "node_E",
         root: "A",
         parents: ["D"],
         complete: true,
+        flow: flowid,
+        session: session,
     },
 ]);
-const root = await db.evaluation.findOne({ selector: { id: "A" } }).exec();
 
-fullTree(root).subscribe((tree) =>
-    console.log("tree", JSON.stringify(tree, null, 2))
-);
+const node = await db.nodes.upsert({
+    id: "node_E",
+    parents: ["node_D", "node_C", "node_B"],
+    flow: flowid,
+});
 
-const G = await db.evaluation.findOne({ selector: { id: "D" } }).exec();
-const isa = await partial(G);
-console.log("G isa", isa);
+node.trigger$(session).subscribe((newEval) => {
+    console.log("newEval", newEval); //, newEval.toJSON());
+});
+
+await db.evaluations.bulkUpsert([
+    {
+        id: "D2",
+        node: "node_D",
+        root: "A",
+        parents: ["B", "C"],
+        complete: true,
+        flow: flowid,
+        session: session,
+    },
+    {
+        id: "C2",
+        node: "node_C",
+        root: "A",
+        parents: ["A"],
+        complete: true,
+        flow: flowid,
+        session: session,
+    },
+    {
+        id: "B2",
+        node: "node_B",
+        root: "A",
+        parents: ["A"],
+        complete: true,
+        flow: flowid,
+        session: session,
+    },
+]);
+
+// const root = await db.evaluation.findOne({ selector: { id: "A" } }).exec();
+
+// fullTree(root).subscribe((tree) =>
+//     console.log("tree", JSON.stringify(tree, null, 2))
+// );
+
+// const G = await db.evaluation.findOne({ selector: { id: "D" } }).exec();
+// const isa = await partial(G);
+// console.log("G isa", isa);
