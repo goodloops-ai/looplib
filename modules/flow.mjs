@@ -545,13 +545,17 @@ const defaultWrapper = ({ flow, node, process, connections }) => {
     const wrappedOutput$ = unwrappedOutput$.pipe(
         log(node, "got unwrappedOutput"),
         mergeMap(async ({ packets, state }) => {
+            console.log("update state", packets);
             state = await state.getLatest();
             state = await state.incrementalPatch({
                 packets,
                 complete: true,
             });
+            console.log("udpated State", packets);
 
-            return await getThread(state);
+            const thread = await getThread(state);
+            console.log("got thread", thread);
+            return thread;
         }),
         log(node, "got thread to output")
     );

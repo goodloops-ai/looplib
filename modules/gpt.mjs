@@ -62,6 +62,7 @@ export const schemas = (program) =>
                             ])
                             .default("gpt-4-turbo-preview"),
                         key: z.string().default(OPENAI_API_KEY),
+                        n: z.number().default(1),
                     }),
                 }),
                 z.object({
@@ -256,6 +257,38 @@ export const process = (program) => {
                             },
                         })
                     );
+
+                    if (config.n > 1) {
+                        return from(
+                            openai.chat.completions.create({
+                                messages,
+                                model: config.model,
+                                temperature: config.temperature,
+                                n: config.n,
+                            })
+                        ).pipe(
+                            map((r) =>
+                                [messages.pop()].concat(
+                                    r.choices.map(({ message }) => message)
+                                )
+                            ),
+                            tap((messages) =>
+                                state.incrementalPatch({
+                                    data: {
+                                        messages: messages,
+                                        complete: true,
+                                    },
+                                })
+                            ),
+                            map((messages) => ({
+                                state,
+                                packets: messages.map((message) => ({
+                                    type: "message",
+                                    data: message,
+                                })),
+                            }))
+                        );
+                    }
 
                     const runner = openai.beta.chat.completions[fKey]({
                         stream: true,
