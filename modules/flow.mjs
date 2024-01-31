@@ -30,6 +30,11 @@ import { deepEqual } from "fast-equals";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "./db.mjs";
+import { groupBy } from "https://esm.sh/rxjs@7.8.1";
+import { toArray } from "https://esm.sh/rxjs@7.8.1";
+import { distinct } from "https://esm.sh/rxjs@7.8.1";
+
+import { Graph, alg } from "@dagrejs/graphlib";
 
 const schemas = (program) => {
     return of(
@@ -229,6 +234,155 @@ export const process = (program) => {
             flowOutput$ /**updatePositions$, flowState$, */
         );
     };
+};
+
+const initNode = ({ flow, node, session }) => {
+    const evaluations = node.collection.database.evaluations;
+    const parents$ = node.get$("parents").pipe(shareReplay(1));
+    const trees$ = evaluations
+        .find({
+            selector: {
+                session,
+                flow: flow.id,
+                parents: {
+                    $exists: false,
+                },
+            },
+        })
+        .$.pipe(
+            switchMap((roots) =>
+                from(roots).pipe(
+                    mergeMap(
+                        (root) =>
+                            evaluations.find({
+                                selector: {
+                                    root: root.id,
+                                    complete: true,
+                                },
+                            }).$
+                    ),
+                    mergeMap((sameRoot) =>
+                        from(sameRoot).pipe(
+                            reduce((graph, evaluation) => {
+                                graph.setNode(evaluation.id, evaluation);
+                                const parents = evaluation.parents || [];
+                                for (const parent of parents) {
+                                    graph.setEdge(parent, evaluation.id);
+                                }
+                            }, new Graph())
+                        )
+                    ),
+                    scan(
+                        (all, graph) => all.set(graph.sources()[0].id, graph),
+                        new Map()
+                    )
+                )
+            ),
+            shareReplay(1)
+        );
+
+    const input$ = combineLatest(
+        parents$.pipe(
+            switchMap(
+                (ids) =>
+                    evaluations.find({
+                        selector: {
+                            session,
+                            node: {
+                                $in: ids,
+                            },
+                            complete: true,
+                            consumed: false,
+                        },
+                        fields: ["root", "node", "id"],
+                    }).$
+            ),
+            mergeMap((newEvaluations) => from(newEvaluations))
+        ),
+        trees$
+    ).pipe(
+        filter(([evaluation, trees]) => {
+            const tree = trees.get(evaluation.root);
+            return tree.node(evaluation.id);
+        }),
+        withLatestFrom(parents$),
+        map(([evaluation, trees, parents]) => {
+            const tree = trees.get(evaluation.root);
+            const mst = alg.prim(tree, () => 1);
+            const djk = alg
+                .djikstra(mst, evaluation.id, () => 1)
+                .sort((a, b) => a.distance - b.distance);
+
+            const triggers = new Map([[evaluation.node, evaluation]]);
+            for (const evalId of djk) {
+                const evalNode = tree.node(evalId);
+                if (
+                    parents.includes(evalNode.node) &&
+                    !triggers.has(evalNode.node)
+                ) {
+                    triggers.set(evalNode.node, evalNode);
+                    if (parents.every((parent) => triggers.has(parent))) {
+                        break;
+                    }
+                }
+            }
+
+            return [evaluation, triggers, parents];
+        }),
+        filter(([_, triggers, parents]) =>
+            parents.every((p) => triggers.has(p))
+        ),
+        mergeMap(([evaluation, triggers]) =>
+            Promise.all([
+                evaluation.incrementalPatch({ consumed: true }),
+                evaluations.upsert({
+                    id: uuidv4(),
+                    root: evaluation.root,
+                    flow: flow.id,
+                    node: node.id,
+                    session,
+                    parents: triggers.values().map(({ id }) => id),
+                }),
+            ])
+        ),
+
+        filter(([potentials, parents]) =>
+            parents.every((id) => potentials.some(({ node }) => node === id))
+        ),
+        map(([triggeringEvals]) => triggeringEvals),
+        distinct((list) => JSON.stringify(list.map(({ id }) => id).sort())),
+        shareReplay(1)
+    );
+
+    const operator$ = node.get$("operator").pipe(
+        filter(Boolean),
+        switchMap((lib) => import(lib)),
+        map((module) => module.default(node))
+    );
+
+    const output$ = operator.pipe$(
+        switchMap((operator) => input$.pipe(operator))
+    );
+
+    // operator$.pipe(
+
+    // )
+    //     mergeMap((list) =>
+    //         evaluations.upsert({
+    //             id: uuidv4(),
+    //             root: list[0].root,
+    //             session,
+    //             node: node.id,
+    //             flow: flow.id,
+    // 			parents: list.map(({ id }) => id),
+    //             complete: false,
+    //         })
+    //     ),
+    //     mergeMap(async (evaluation) => {
+    // 		const input = await partial(evaluation);
+    // 		return {input, evaluation}
+    //     })
+    // );
 };
 
 const createNode = (flow, node, nodes$) => {
