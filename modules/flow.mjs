@@ -344,14 +344,8 @@ const initNode = ({ flow, node, session }) => {
                     parents: triggers.values().map(({ id }) => id),
                 }),
             ])
-        ),
-
-        filter(([potentials, parents]) =>
-            parents.every((id) => potentials.some(({ node }) => node === id))
-        ),
-        map(([triggeringEvals]) => triggeringEvals),
-        distinct((list) => JSON.stringify(list.map(({ id }) => id).sort())),
-        shareReplay(1)
+        )
+        // TODO put above in db functions
     );
 
     const operator$ = node.get$("operator").pipe(
