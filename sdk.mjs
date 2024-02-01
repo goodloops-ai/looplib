@@ -14,8 +14,12 @@ import { v4 as uuidv4 } from "uuid";
 import { deepEqual } from "fast-equals";
 import { take } from "npm:rxjs@^7.8.1";
 import filenamify from "filenamify";
+import { load } from "https://deno.land/std@0.214.0/dotenv/mod.ts";
+
+await load({ export: true });
+
 export class Workflow {
-    constructor(id, env) {
+    constructor(id, env = {}) {
         env.OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
         this.id = id;
         this.ready = Promise.all([
