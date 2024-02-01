@@ -55,7 +55,8 @@ export class Workflow {
     }
 
     connect(source, target, guard) {
-        this.jobs = this.jobs.then(() => {
+        this.jobs = this.jobs.then(async () => {
+            await new Promise((r) => setTimeout(r, 1000));
             return db.connections.upsert({
                 id: uuidv4(),
                 flow: this.program.id,
