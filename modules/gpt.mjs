@@ -204,6 +204,7 @@ export const process = (program) => {
             withLatestFrom(config$, schemas(program)),
             // tap(console.log.bind(console, program.id, "withLatest config")),
             mergeMap(([{ trigger, evaluation, context }, config, schemas]) => {
+                console.log("CONTEXT", context);
                 const openai = new OpenAI({
                     apiKey: config.key,
                     dangerouslyAllowBrowser: true,

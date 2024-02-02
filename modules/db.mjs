@@ -72,6 +72,14 @@ const evaluationsSchema = {
             type: "string",
             ref: "evaluations",
         },
+        trigger: {
+            type: "string",
+            ref: "triggers",
+        },
+        terminal: {
+            type: "boolean",
+            default: false,
+        },
         packets: {
             type: "array",
             items: {
@@ -152,6 +160,10 @@ const nodesSchema = {
         operator: {
             type: "string",
         },
+        join: {
+            type: "string",
+            ref: "nodes",
+        },
         config: {
             type: "object",
             additionalProperties: true,
@@ -201,6 +213,19 @@ const config = {
         nodes: {
             schema: nodesSchema,
             methods: {
+                isOutput: async function () {
+                    const children = await this.collection
+                        .find({
+                            selector: {
+                                parents: {
+                                    $in: [this.id],
+                                },
+                            },
+                        })
+                        .exec();
+
+                    return !children?.length;
+                },
                 triggers$: function (session) {
                     // console.log(
                     //     "CALL TRIGGER",
@@ -291,6 +316,7 @@ const config = {
                                             $in: ids,
                                         },
                                         complete: true,
+                                        terminal: false,
                                     },
                                 }).$
                         ),
@@ -315,7 +341,28 @@ const config = {
                             const tree = trees.get(evaluation.root);
                             return tree.node(evaluation.id);
                         }),
-                        map(([evaluation, trees, parents]) => {
+                        mergeMap(async ([evaluation, trees, parents]) => {
+                            let joinTrigger;
+                            let joinSearch = await evaluation.parents_;
+                            while (this.join && !joinTrigger) {
+                                console.log("joinsearch");
+                                for (const parent of joinSearch) {
+                                    if (parent.node === this.join) {
+                                        joinTrigger = parent.trigger;
+                                        break;
+                                    }
+                                }
+                                joinSearch = (
+                                    await Promise.all(
+                                        joinSearch.map(
+                                            (evals) => evals.parents_
+                                        )
+                                    )
+                                ).flat();
+                            }
+
+                            console.log("JOINTRIGGER", joinTrigger);
+
                             const tree = trees.get(evaluation.root);
                             const mst = alg.prim(tree, () => 1);
                             // console.log(tree);
@@ -331,29 +378,78 @@ const config = {
                                 }))
                                 .sort((a, b) => a.distance - b.distance);
 
-                            // console.log(
-                            //     "djk array",
-                            //     evaluation.id,
-                            //     djkArray,
-                            //     alg.topsort(tree),
-                            //     alg.topsort(mst)
-                            // );
+                            console.log(
+                                "djk array",
+                                evaluation.id,
+                                djkArray,
+                                alg.topsort(tree),
+                                alg.topsort(mst)
+                            );
                             const triggers = new Map([
-                                [evaluation.node, evaluation],
+                                [evaluation.node, [evaluation]],
                             ]);
+                            let allAccountedFor = true;
                             for (const { to: evalId } of djkArray) {
                                 const evalNode = tree.node(evalId);
-                                if (
-                                    parents.includes(evalNode.node) &&
-                                    !triggers.has(evalNode.node)
-                                ) {
-                                    triggers.set(evalNode.node, evalNode);
+                                if (parents.includes(evalNode.node)) {
+                                    const evals =
+                                        triggers.get(evalNode.node) || [];
+
+                                    if (!this.join || !evals.length) {
+                                        evals.push(evalNode);
+                                    }
+                                    triggers.set(evalNode.node, evals);
                                     if (
                                         parents.every((parent) =>
                                             triggers.has(parent)
                                         )
                                     ) {
-                                        break;
+                                        if (!this.join) {
+                                            break;
+                                        } else {
+                                            for (const [
+                                                parent,
+                                                set,
+                                            ] of triggers.entries()) {
+                                                const joinTrigger =
+                                                    await set[0].getTrigger(
+                                                        parent
+                                                    );
+                                                if (!joinTrigger) {
+                                                    continue;
+                                                }
+
+                                                const joinAncestors =
+                                                    await evaluation.collection
+                                                        .find({
+                                                            selector: {
+                                                                trigger:
+                                                                    joinTrigger,
+                                                            },
+                                                        })
+                                                        .exec();
+
+                                                for (const ancestor of joinAncestors) {
+                                                    const accountedFor =
+                                                        await ancestor.isAccountedFor(
+                                                            set
+                                                        );
+                                                    allAccountedFor =
+                                                        allAccountedFor &&
+                                                        accountedFor;
+                                                }
+
+                                                // find which sets have joinTrigger in their ancestry
+                                                // accumulate node path for that join history
+                                                // find all direct descendants of joinTrigger
+                                                // follow node path back for each joinTrigger descendent. either to a termination or to a member of the current trigger set.
+                                                //
+                                            }
+
+                                            if (allAccountedFor) {
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -363,23 +459,36 @@ const config = {
                             //         triggers.values().map(({ id }) => id)
                             //     )
                             // );
-                            return [evaluation, triggers, parents];
+                            return [
+                                evaluation,
+                                triggers,
+                                parents,
+                                allAccountedFor,
+                            ];
                         }),
                         // tap(() => console.log("ABOUT TO FILTER TRIGGERS")),
-                        filter(([_, triggers, parents]) =>
-                            parents.every((p) => triggers.has(p))
-                        ),
+                        filter(([_, triggers, parents, aaf]) => {
+                            if (!this.join) {
+                                return parents.every((p) => triggers.has(p));
+                            } else {
+                                return (
+                                    aaf && parents.every((p) => triggers.has(p))
+                                );
+                            }
+                        }),
                         // tap(() => console.log("FINISHED FILTER TRIGGERS")),
                         distinct(([_, triggers]) =>
                             JSON.stringify(
-                                Array.from(
-                                    triggers.values().map(({ id }) => id)
-                                ).sort()
+                                Array.from(triggers.values())
+                                    .flat()
+                                    .map(({ id }) => id)
+                                    .sort()
                             )
                         ),
                         // tap(() => console.log("PASSED DISTINCT")),
 
                         tap(async ([evaluation, triggers]) => {
+                            console.log;
                             const trigger =
                                 await this.collection.database.triggers.upsert({
                                     id: uuidv4(),
@@ -387,9 +496,10 @@ const config = {
                                     node: this.id,
                                     root: evaluation.root,
                                     session,
-                                    parents: Array.from(
-                                        triggers.values().map(({ id }) => id)
-                                    ),
+                                    parents: Array.from(triggers.values())
+                                        .flat()
+                                        .map(({ id }) => id)
+                                        .sort(),
                                 });
 
                             // console.log("MADE TRIGGER");
@@ -424,6 +534,56 @@ const config = {
                 getContext: async function () {
                     return await partial(this);
                 },
+                getTrigger: async function (_node) {
+                    const context = await this.getContext();
+                    const match = context
+                        .reverse()
+                        .find(({ node }) => node === _node);
+
+                    return match?.trigger;
+                },
+                isAccountedFor: async function (potentialDescendants) {
+                    if (this.terminal) {
+                        return true;
+                    }
+                    const node = await this.node_;
+
+                    if (await node.isOutput()) {
+                        return true;
+                    }
+
+                    const search = await this.collection
+                        .find({
+                            selector: {
+                                parents: {
+                                    $in: [this.id],
+                                },
+                            },
+                        })
+                        .exec();
+
+                    if (
+                        search.some(({ id }) =>
+                            potentialDescendants.some((desc) => desc.id === id)
+                        )
+                    ) {
+                        return true;
+                    }
+
+                    const next = await Promise.all(
+                        search.map((_eval) =>
+                            _eval.isAccountedFor(potentialDescendants)
+                        )
+                    );
+
+                    if (
+                        next.reduce((acc, accounted) => acc && accounted, true)
+                    ) {
+                        return true;
+                    }
+
+                    return false;
+                },
             },
         },
         triggers: {
@@ -442,6 +602,7 @@ const config = {
                             flow: this.flow,
                             node: this.node,
                             root: this.root || this.id,
+                            trigger: this.id,
                             session: this.session,
                             parents: this.parents,
                         })
