@@ -15,16 +15,17 @@ import {
     take,
     takeUntil,
     buffer,
+    of,
+    zip,
     tap,
     mergeMap,
     pipe,
     shareReplay,
     distinctUntilChanged,
     EMPTY,
+    firstValueFrom,
 } from "rxjs";
 import { deepEqual } from "fast-equals";
-import { v4 as uuidv4 } from "uuid";
-import { firstValueFrom } from "npm:rxjs@^7.8.1";
 
 export const OPENAI_API_KEY = "OPENAI_API_KEY";
 export const ENV = [OPENAI_API_KEY];
@@ -204,7 +205,7 @@ export const process = (program) => {
             withLatestFrom(config$, schemas(program)),
             // tap(console.log.bind(console, program.id, "withLatest config")),
             mergeMap(([{ trigger, evaluation, context }, config, schemas]) => {
-                console.log("CONTEXT", context);
+                // console.log("CONTEXT", context);
                 const openai = new OpenAI({
                     apiKey: config.key,
                     dangerouslyAllowBrowser: true,
@@ -226,8 +227,8 @@ export const process = (program) => {
                     .flat()
                     .filter(({ type }) => type === "tool");
 
-                console.log("MESSAGES", messages);
-                console.log("TOOLS", _tools);
+                // console.log("MESSAGES", messages);
+                // console.log("TOOLS", _tools);
                 const fKey = _tools.length > 0 ? "runTools" : "stream";
 
                 const tools = _tools.map(
@@ -274,26 +275,36 @@ export const process = (program) => {
                             n: config.n,
                         })
                     ).pipe(
-                        map((r) =>
-                            [messages.pop()].concat(
-                                r.choices.map(({ message }) => message)
-                            )
-                        ),
-                        tap((messages) =>
-                            state.incrementalPatch({
-                                data: {
+                        switchMap((res) => {
+                            const evals$ = concat(
+                                of(evaluation),
+                                trigger.createEvals(config.n - 1)
+                            );
+
+                            const pre = [messages.pop()];
+
+                            const messages$ = from(
+                                res.choices.map(({ message }) =>
+                                    pre.concat([message])
+                                )
+                            );
+
+                            return zip(messages$, evals$);
+                        }),
+                        take(config.n),
+                        tap(([messages, evaluation]) =>
+                            evaluation.incrementalPatch({
+                                state: {
                                     messages: messages,
                                     complete: true,
                                 },
+                                packets: messages.map((msg) => ({
+                                    type: "message",
+                                    data: msg,
+                                })),
+                                complete: true,
                             })
-                        ),
-                        map((messages) => ({
-                            state,
-                            packets: messages.map((message) => ({
-                                type: "message",
-                                data: message,
-                            })),
-                        }))
+                        )
                     );
                 }
 
