@@ -312,6 +312,7 @@
     }
   },
   "redirects": {
+    "https://esm.sh/@dagrejs/graphlib": "https://esm.sh/@dagrejs/graphlib@2.1.13",
     "https://esm.sh/@luismayo/schinquirer": "https://esm.sh/@luismayo/schinquirer@0.4.1",
     "https://esm.sh/ajv": "https://esm.sh/ajv@8.12.0",
     "https://esm.sh/ajv-formats": "https://esm.sh/ajv-formats@2.1.1",
@@ -382,6 +383,7 @@
     "https://deno.land/x/openai@v4.20.1/streaming.ts": "f360cf909b07562330ca75470ae26eecdc35f176af424b0f74ab673a5b242782",
     "https://deno.land/x/openai@v4.20.1/uploads.ts": "96dbd9e7e7b5a9bc3ff38e81f6c1372c2cdce28b38c704cd61c7daeb5494b6f9",
     "https://deno.land/x/openai@v4.20.1/version.ts": "55cb1dcb3480047da666ac02403f7174e8b5c072c4e8483a56e4eab96da13757",
+    "https://esm.sh/@dagrejs/graphlib@2.1.13": "e66e28e108b93fa653460c12e234e326f565dfa79166e3140c80cfcfbe275aba",
     "https://esm.sh/@luismayo/schinquirer@0.4.1": "e6e1e81c1b7a96da4329090fbcbab0e3f62a83b0360bfedcefeccd19e24cb273",
     "https://esm.sh/ajv-formats@2.1.1": "575b3830618970ddc3aba96310bf4df7358bb37fcea101f58b36897ff3ac2ea7",
     "https://esm.sh/ajv@8.12.0": "762762b07884fa5db0c40eec3026ae5a25b9fa9f6ac76cc721dda9e4a70adc82",
@@ -523,6 +525,7 @@
     "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/esm/typeof.js": "e813e8e9567f540f34744c10249c7259e66b67b9032ea28e55c062b52d570f61",
     "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/inheritsLoose.js": "96c503fde5639f1244bc8ad7826a06021c69cce2059b43aa1873c37784d936b9",
     "https://esm.sh/v135/@babel/runtime@7.23.9/denonext/helpers/wrapNativeSuper.js": "0cc61e3aea69f58466c93449581df2f6bce5ccae998ed47dfe73a5e2abf6af7f",
+    "https://esm.sh/v135/@dagrejs/graphlib@2.1.13/denonext/graphlib.mjs": "35d1a38b2720c56102d3e5feff6a7d772ea8f36db0efb895e376592262aaaf23",
     "https://esm.sh/v135/ajv-formats@2.1.1/denonext/ajv-formats.mjs": "06092e00b42202633ae6dab4b53287c133af882ddb14c6707277cdb237634967",
     "https://esm.sh/v135/ajv@8.12.0/denonext/ajv.mjs": "4645df9093d0f8be0e964070a4a7aea8adea06e8883660340931f7a3f979fc65",
     "https://esm.sh/v135/ajv@8.12.0/denonext/dist/compile/codegen.js": "d981238e5b1e78217e1c6db59cbd594369279722c608ed630d08717ee44edd84",
