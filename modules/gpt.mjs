@@ -24,6 +24,7 @@ import {
 } from "rxjs";
 import { deepEqual } from "fast-equals";
 import { v4 as uuidv4 } from "uuid";
+import { firstValueFrom } from "npm:rxjs@^7.8.1";
 
 export const OPENAI_API_KEY = "OPENAI_API_KEY";
 export const ENV = [OPENAI_API_KEY];
@@ -189,179 +190,182 @@ export const process = (program) => {
             ),
             input$
         ).pipe(
-            // tap(console.log.bind(console, program.id, "main input")),
-            distinctUntilChanged(deepEqual),
-            // tap(console.log.bind(console, program.id, "distinct")),
-            withLatestFrom(schemas(program)),
             // tap(console.log.bind(console, program.id, "withLatestSchema")),
-            map(([{ packets, state }, schemas]) => ({
-                state,
-                messages: packets
-                    .filter(({ type }) => type !== "config" && type !== "tool")
-                    .map(schemas.parse)
-                    .map(({ data }) => data),
-                tools: packets.filter(({ type }) => type === "tool"),
+            mergeMap(async (trigger) => ({
+                trigger,
+                evaluation: await firstValueFrom(trigger.createEval()),
+            })),
+            mergeMap(async ({ trigger, evaluation }) => ({
+                trigger,
+                evaluation,
+                context: await evaluation.getContext(),
             })),
             // tap(console.log.bind(console, program.id, "mapped input")),
-            withLatestFrom(config$),
+            withLatestFrom(config$, schemas(program)),
             // tap(console.log.bind(console, program.id, "withLatest config")),
-            mergeMap(
-                ([{ messages: _messages, state, tools: _tools }, config]) => {
-                    const openai = new OpenAI({
-                        apiKey: config.key,
-                        dangerouslyAllowBrowser: true,
-                    });
+            mergeMap(([{ trigger, evaluation, context }, config, schemas]) => {
+                const openai = new OpenAI({
+                    apiKey: config.key,
+                    dangerouslyAllowBrowser: true,
+                });
 
-                    const messages = _messages.concat({
+                const messages = context
+                    .map(({ packets }) => packets || [])
+                    .flat()
+                    .filter(({ type }) => type !== "tool")
+                    .map(schemas.parse)
+                    .map(({ data }) => data)
+                    .concat({
                         role: config.role,
                         content: config.prompt,
                     });
 
-                    const fKey = _tools.length > 0 ? "runTools" : "stream";
+                const _tools = context
+                    .map(({ packets }) => packets || [])
+                    .flat()
+                    .filter(({ type }) => type === "tool");
 
-                    const tools = _tools.map(
-                        ({
-                            data: {
-                                type,
-                                function: {
-                                    function: fnStr,
-                                    parse: pStr,
-                                    ...def
-                                },
-                            },
-                        }) => ({
+                console.log("MESSAGES", messages);
+                console.log("TOOLS", _tools);
+                const fKey = _tools.length > 0 ? "runTools" : "stream";
+
+                const tools = _tools.map(
+                    ({
+                        data: {
                             type,
-                            function: {
-                                function: async (parameters, runner) => {
-                                    // console.log(
-                                    //     "got tool invokation",
-                                    //     parameters,
-                                    //     runner
-                                    // );
-                                    const fn = new Function(
-                                        "parameters",
-                                        "runner",
-                                        `return (${fnStr})(parameters,runner)`
-                                    );
+                            function: { function: fnStr, parse: pStr, ...def },
+                        },
+                    }) => ({
+                        type,
+                        function: {
+                            function: async (parameters, runner) => {
+                                // console.log(
+                                //     "got tool invokation",
+                                //     parameters,
+                                //     runner
+                                // );
+                                const fn = new Function(
+                                    "parameters",
+                                    "runner",
+                                    `return (${fnStr})(parameters,runner)`
+                                );
 
-                                    const res = await fn(parameters, runner);
-                                    // console.log("result", res);
-                                    return res;
-                                },
-                                parse: (args) => {
-                                    // console.log("got args", args);
-                                    const parse = new Function("args", pStr);
-                                    return JSON.parse(args);
-                                },
-                                ...def,
+                                const res = await fn(parameters, runner);
+                                // console.log("result", res);
+                                return res;
                             },
+                            parse: (args) => {
+                                // console.log("got args", args);
+                                const parse = new Function("args", pStr);
+                                return JSON.parse(args);
+                            },
+                            ...def,
+                        },
+                    })
+                );
+
+                if (config.n > 1) {
+                    return from(
+                        openai.chat.completions.create({
+                            messages,
+                            model: config.model,
+                            temperature: config.temperature,
+                            n: config.n,
                         })
-                    );
-
-                    if (config.n > 1) {
-                        return from(
-                            openai.chat.completions.create({
-                                messages,
-                                model: config.model,
-                                temperature: config.temperature,
-                                n: config.n,
-                            })
-                        ).pipe(
-                            map((r) =>
-                                [messages.pop()].concat(
-                                    r.choices.map(({ message }) => message)
-                                )
-                            ),
-                            tap((messages) =>
-                                state.incrementalPatch({
-                                    data: {
-                                        messages: messages,
-                                        complete: true,
-                                    },
-                                })
-                            ),
-                            map((messages) => ({
-                                state,
-                                packets: messages.map((message) => ({
-                                    type: "message",
-                                    data: message,
-                                })),
-                            }))
-                        );
-                    }
-
-                    const runner = openai.beta.chat.completions[fKey]({
-                        stream: true,
-                        messages,
-                        model: config.model,
-                        temperature: config.temperature,
-                        ...(fKey === "runTools" ? { tools } : {}),
-                        ...(fKey === "runTools" &&
-                        tools.length === 1 &&
-                        _tools[0].force
-                            ? {
-                                  tool_choice: {
-                                      type: "function",
-                                      function: {
-                                          name: tools[0].function.name,
-                                      },
-                                  },
-                              }
-                            : {}),
-                    });
-
-                    const end$ = fromEvent(runner, "end").pipe(
-                        withLatestFrom(state.$),
-                        tap(([_, state]) => {
+                    ).pipe(
+                        map((r) =>
+                            [messages.pop()].concat(
+                                r.choices.map(({ message }) => message)
+                            )
+                        ),
+                        tap((messages) =>
                             state.incrementalPatch({
                                 data: {
-                                    messages: runner.messages,
+                                    messages: messages,
                                     complete: true,
                                 },
-                            });
-                            deltas.unsubscribe();
-                        })
-                    );
-
-                    const deltas = fromEvent(
-                        runner,
-                        "content",
-                        (delta, snapshot) => ({
-                            delta,
-                            snapshot,
-                        })
-                    )
-                        .pipe(
-                            withLatestFrom(state.$),
-                            concatMap(async ([data, state]) => {
-                                const latest = await state.getLatest();
-                                return latest.patch({
-                                    data: {
-                                        ...state.data,
-                                        ...data,
-                                    },
-                                });
-                            }),
-                            takeUntil(end$)
-                        )
-                        .subscribe();
-
-                    // console.log("send messages!?!?!??!", messages);
-                    return from(
-                        runner
-                            .finalMessage()
-                            .then(() =>
-                                runner.messages
-                                    .slice(_messages.length)
-                                    .map((data) => ({ type: "message", data }))
-                            )
-                            .then((packets) => ({
-                                state,
-                                packets,
-                            }))
+                            })
+                        ),
+                        map((messages) => ({
+                            state,
+                            packets: messages.map((message) => ({
+                                type: "message",
+                                data: message,
+                            })),
+                        }))
                     );
                 }
-            ),
+
+                const runner = openai.beta.chat.completions[fKey]({
+                    stream: true,
+                    messages,
+                    model: config.model,
+                    temperature: config.temperature,
+                    ...(fKey === "runTools" ? { tools } : {}),
+                    ...(fKey === "runTools" &&
+                    tools.length === 1 &&
+                    _tools[0].force
+                        ? {
+                              tool_choice: {
+                                  type: "function",
+                                  function: {
+                                      name: tools[0].function.name,
+                                  },
+                              },
+                          }
+                        : {}),
+                });
+
+                const end$ = fromEvent(runner, "end").pipe(
+                    tap(() => {
+                        evaluation.incrementalPatch({
+                            state: {
+                                messages: runner.messages,
+                            },
+                            complete: true,
+                        });
+                        deltas.unsubscribe();
+                    })
+                );
+
+                const deltas = fromEvent(
+                    runner,
+                    "content",
+                    (delta, snapshot) => ({
+                        delta,
+                        snapshot,
+                    })
+                )
+                    .pipe(
+                        concatMap(async (data) => {
+                            const latest = await evaluation.getLatest();
+                            return latest.patch({
+                                state: {
+                                    ...evaluation.state,
+                                    ...data,
+                                },
+                            });
+                        }),
+                        takeUntil(end$)
+                    )
+                    .subscribe();
+
+                // console.log("send messages!?!?!??!", messages);
+                return from(
+                    runner
+                        .finalMessage()
+                        .then(() =>
+                            runner.messages
+                                .slice(messages.length - 1)
+                                .map((data) => ({ type: "message", data }))
+                        )
+                        .then((packets) =>
+                            evaluation.incrementalPatch({
+                                packets,
+                            })
+                        )
+                );
+            }),
             catchError((e) => {
                 console.log("error", e);
                 return EMPTY;

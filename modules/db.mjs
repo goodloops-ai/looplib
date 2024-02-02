@@ -13,6 +13,8 @@ import {
     reduce,
     withLatestFrom,
     tap,
+    merge,
+    ignoreElements,
 } from "rxjs";
 
 import { Graph, alg } from "@dagrejs/graphlib";
@@ -91,6 +93,43 @@ const evaluationsSchema = {
     statics: {},
 };
 
+const triggersSchema = {
+    version: 0,
+    type: "object",
+    primaryKey: "id",
+    properties: {
+        id: {
+            type: "string",
+            maxLength: 255,
+        },
+        flow: {
+            type: "string",
+            ref: "nodes",
+            maxLength: 255,
+        },
+        node: {
+            type: "string",
+            ref: "nodes",
+            maxLength: 255,
+        },
+        session: {
+            type: "string",
+        },
+        root: {
+            type: "string",
+        },
+        parents: {
+            type: "array",
+            ref: "evaluations",
+            items: {
+                type: "string",
+                maxLength: 255,
+            },
+        },
+    },
+    required: ["id", "flow", "node"],
+};
+
 const nodesSchema = {
     version: 0,
     type: "object",
@@ -162,10 +201,18 @@ const config = {
         nodes: {
             schema: nodesSchema,
             methods: {
-                trigger$: function (session) {
-                    console.log("CALL TRIGGER", this.flow);
+                triggers$: function (session) {
+                    // console.log(
+                    //     "CALL TRIGGER",
+                    //     this.flow,
+                    //     session,
+                    //     this.parents
+                    // );
                     const evaluations = this.collection.database.evaluations;
-                    const parents$ = this.get$("parents").pipe(shareReplay(1));
+                    const parents$ = this.get$("parents").pipe(
+                        filter(Boolean),
+                        shareReplay(1)
+                    );
                     const trees$ = evaluations
                         .find({
                             selector: {
@@ -179,18 +226,19 @@ const config = {
                         .$.pipe(
                             switchMap((roots) =>
                                 from(roots).pipe(
-                                    tap((root) =>
-                                        console.log("got root", root.id)
-                                    ),
+                                    // tap((root) =>
+                                    //     console.log("got root", root.root)
+                                    // ),
                                     mergeMap(
                                         (root) =>
                                             evaluations.find({
                                                 selector: {
-                                                    root: root.id,
+                                                    root: root.root,
                                                     complete: true,
                                                 },
                                             }).$
                                     ),
+                                    filter((r) => r.length),
                                     mergeMap((sameRoot) =>
                                         from(sameRoot).pipe(
                                             reduce((graph, evaluation) => {
@@ -211,12 +259,16 @@ const config = {
                                         )
                                     ),
                                     scan((all, graph) => {
-                                        console.log(
-                                            "add tree",
-                                            graph.nodes(),
-                                            graph.edges()
+                                        const node = graph.node(
+                                            graph.sinks()[0]
                                         );
-                                        all.set(graph.sinks()[0], graph);
+                                        // console.log(
+                                        //     "add tree",
+                                        //     graph.nodes(),
+                                        //     graph.edges(),
+                                        //     node.root
+                                        // );
+                                        all.set(node.root, graph);
                                         return all;
                                     }, new Map())
                                 )
@@ -226,7 +278,10 @@ const config = {
 
                     // return of(null);
 
-                    return parents$.pipe(
+                    const triggerInsert$ = parents$.pipe(
+                        // tap((parents) =>
+                        //     console.log(this.id, "parents", parents.length)
+                        // ),
                         switchMap(
                             (ids) =>
                                 evaluations.find({
@@ -240,9 +295,9 @@ const config = {
                                 }).$
                         ),
                         mergeMap((newEvaluations) => from(newEvaluations)),
-                        tap((nEval) =>
-                            console.log("NEW EVAL, nEval.id", nEval.id)
-                        ),
+                        // tap((nEval) =>
+                        //     console.log("NEW EVAL, nEval.id", nEval.id)
+                        // ),
                         delay(100),
                         withLatestFrom(trees$, parents$),
                         // tap(
@@ -252,18 +307,18 @@ const config = {
                         //     )
                         // ),
                         filter(([evaluation, trees]) => {
-                            console.log(
-                                "check trees for root",
-                                evaluation.root,
-                                trees
-                            );
+                            // console.log(
+                            //     "check trees for root",
+                            //     evaluation.root,
+                            //     trees
+                            // );
                             const tree = trees.get(evaluation.root);
                             return tree.node(evaluation.id);
                         }),
                         map(([evaluation, trees, parents]) => {
                             const tree = trees.get(evaluation.root);
                             const mst = alg.prim(tree, () => 1);
-                            console.log(tree);
+                            // console.log(tree);
                             const djk = alg.dijkstra(
                                 tree,
                                 evaluation.id,
@@ -276,13 +331,13 @@ const config = {
                                 }))
                                 .sort((a, b) => a.distance - b.distance);
 
-                            console.log(
-                                "djk array",
-                                evaluation.id,
-                                djkArray,
-                                alg.topsort(tree),
-                                alg.topsort(mst)
-                            );
+                            // console.log(
+                            //     "djk array",
+                            //     evaluation.id,
+                            //     djkArray,
+                            //     alg.topsort(tree),
+                            //     alg.topsort(mst)
+                            // );
                             const triggers = new Map([
                                 [evaluation.node, evaluation],
                             ]);
@@ -302,17 +357,19 @@ const config = {
                                     }
                                 }
                             }
-                            console.log(
-                                "triggers",
-                                Array.from(
-                                    triggers.values().map(({ id }) => id)
-                                )
-                            );
+                            // console.log(
+                            //     "triggers",
+                            //     Array.from(
+                            //         triggers.values().map(({ id }) => id)
+                            //     )
+                            // );
                             return [evaluation, triggers, parents];
                         }),
+                        // tap(() => console.log("ABOUT TO FILTER TRIGGERS")),
                         filter(([_, triggers, parents]) =>
                             parents.every((p) => triggers.has(p))
                         ),
+                        // tap(() => console.log("FINISHED FILTER TRIGGERS")),
                         distinct(([_, triggers]) =>
                             JSON.stringify(
                                 Array.from(
@@ -320,26 +377,77 @@ const config = {
                                 ).sort()
                             )
                         ),
+                        // tap(() => console.log("PASSED DISTINCT")),
 
-                        mergeMap(([evaluation, triggers]) =>
-                            evaluations.upsert({
-                                id: uuidv4(),
-                                root: evaluation.root,
-                                flow: this.flow,
+                        tap(async ([evaluation, triggers]) => {
+                            const trigger =
+                                await this.collection.database.triggers.upsert({
+                                    id: uuidv4(),
+                                    flow: this.flow,
+                                    node: this.id,
+                                    root: evaluation.root,
+                                    session,
+                                    parents: Array.from(
+                                        triggers.values().map(({ id }) => id)
+                                    ),
+                                });
+
+                            // console.log("MADE TRIGGER");
+                            return trigger;
+                        }),
+                        // tap(() => console.log("WROTE NEW TRIGGER")),
+                        ignoreElements()
+                    );
+
+                    const triggers$ = this.collection.database.triggers
+                        .find({
+                            selector: {
                                 node: this.id,
                                 session,
-                                parents: Array.from(
-                                    triggers.values().map(({ id }) => id)
-                                ),
-                            })
-                        ),
-                        mergeMap((newEval) => partial(newEval))
-                    );
+                                flow: this.flow,
+                            },
+                        })
+                        .$.pipe(
+                            filter(Boolean),
+                            mergeMap((res) => from(res)),
+                            distinct(({ id }) => id)
+                            // tap((t) => console.log("GOT TRIGGER", t.id))
+                        );
+
+                    return merge(triggerInsert$, triggers$);
                 },
             },
         },
         evaluations: {
             schema: evaluationsSchema,
+            methods: {
+                getContext: async function () {
+                    return await partial(this);
+                },
+            },
+        },
+        triggers: {
+            schema: triggersSchema,
+            methods: {
+                createEvals: function (qty = 1) {
+                    return from(new Array(qty)).pipe(
+                        mergeMap(() => this.createEval())
+                    );
+                },
+                createEval: function () {
+                    // console.log("CREATE EVAL", this.root);
+                    return from(
+                        this.collection.database.evaluations.upsert({
+                            id: uuidv4(),
+                            flow: this.flow,
+                            node: this.node,
+                            root: this.root || this.id,
+                            session: this.session,
+                            parents: this.parents,
+                        })
+                    );
+                },
+            },
         },
     },
 };
@@ -464,99 +572,110 @@ const shouldInclude = async (doc, ancestorId, depth = 0) => {
 const flowid = "FLOW";
 const session = new Date().toDateString();
 
-await db.evaluations.bulkUpsert([
-    {
-        id: "A",
-        node: "node_A",
-        root: "A",
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-    {
-        id: "B",
-        node: "node_B",
-        root: "A",
-        parents: ["A"],
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-    {
-        id: "C",
-        node: "node_C",
-        root: "A",
-        parents: ["A"],
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-    {
-        id: "D",
-        node: "node_D",
-        root: "A",
-        parents: ["B", "C"],
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-    {
-        id: "E",
-        node: "node_E",
-        root: "A",
-        parents: ["D"],
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-]);
+// await db.evaluations.bulkUpsert([
+//     {
+//         id: "A",
+//         node: "node_A",
+//         root: "A",
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+//     {
+//         id: "B",
+//         node: "node_B",
+//         root: "A",
+//         parents: ["A"],
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+//     {
+//         id: "C",
+//         node: "node_C",
+//         root: "A",
+//         parents: ["A"],
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+//     {
+//         id: "D",
+//         node: "node_D",
+//         root: "A",
+//         parents: ["B", "C"],
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+//     {
+//         id: "E",
+//         node: "node_E",
+//         root: "A",
+//         parents: ["D"],
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+// ]);
 
-const node = await db.nodes.upsert({
-    id: "node_E",
-    parents: ["node_D", "node_C", "node_B"],
-    flow: flowid,
-});
+// const node = await db.nodes.upsert({
+//     id: "node_E",
+//     parents: ["node_D", "node_C", "node_B"],
+//     flow: flowid,
+// });
 
-node.trigger$(session).subscribe((newEval) => {
-    console.log("newEval", newEval); //, newEval.toJSON());
-});
+// node.triggers$(session).subscribe(async (newEval) => {
+//     console.log("newTrigger", newEval);
+//     console.log(
+//         "newTrigger",
+//         await (await firstValueFrom(newEval.createEval())).getContext()
+//     ); //, newEval.toJSON());
+// });
 
-await db.evaluations.bulkUpsert([
-    {
-        id: "D2",
-        node: "node_D",
-        root: "A",
-        parents: ["B", "C"],
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-    {
-        id: "C2",
-        node: "node_C",
-        root: "A",
-        parents: ["A"],
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-    {
-        id: "B2",
-        node: "node_B",
-        root: "A",
-        parents: ["A"],
-        complete: true,
-        flow: flowid,
-        session: session,
-    },
-]);
+// node.collection.database.triggers.upsert({
+//     id: uuidv4(),
+//     node: node.id,
+//     flow: flowid,
+//     session,
+// });
 
-// const root = await db.evaluation.findOne({ selector: { id: "A" } }).exec();
+// await db.evaluations.bulkUpsert([
+//     {
+//         id: "D2",
+//         node: "node_D",
+//         root: "A",
+//         parents: ["B", "C"],
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+//     {
+//         id: "C2",
+//         node: "node_C",
+//         root: "A",
+//         parents: ["A"],
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+//     {
+//         id: "B2",
+//         node: "node_B",
+//         root: "A",
+//         parents: ["A"],
+//         complete: true,
+//         flow: flowid,
+//         session: session,
+//     },
+// ]);
 
-// fullTree(root).subscribe((tree) =>
-//     console.log("tree", JSON.stringify(tree, null, 2))
-// );
+// // const root = await db.evaluation.findOne({ selector: { id: "A" } }).exec();
 
-// const G = await db.evaluation.findOne({ selector: { id: "D" } }).exec();
-// const isa = await partial(G);
-// console.log("G isa", isa);
+// // fullTree(root).subscribe((tree) =>
+// //     console.log("tree", JSON.stringify(tree, null, 2))
+// // );
+
+// // const G = await db.evaluation.findOne({ selector: { id: "D" } }).exec();
+// // const isa = await partial(G);
+// // console.log("G isa", isa);
