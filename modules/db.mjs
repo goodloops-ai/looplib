@@ -229,12 +229,6 @@ const config = {
                     return !children?.length;
                 },
                 triggers$: function (session) {
-                    // console.log(
-                    //     "CALL TRIGGER",
-                    //     this.flow,
-                    //     session,
-                    //     this.parents
-                    // );
                     const evaluations = this.collection.database.evaluations;
                     const parents$ = this.get$("parents").pipe(
                         filter(Boolean),
@@ -253,9 +247,6 @@ const config = {
                         .$.pipe(
                             switchMap((roots) =>
                                 from(roots).pipe(
-                                    // tap((root) =>
-                                    //     console.log("got root", root.root)
-                                    // ),
                                     mergeMap(
                                         (root) =>
                                             evaluations.find({
@@ -289,12 +280,6 @@ const config = {
                                         const node = graph.node(
                                             graph.sinks()[0]
                                         );
-                                        // console.log(
-                                        //     "add tree",
-                                        //     graph.nodes(),
-                                        //     graph.edges(),
-                                        //     node.root
-                                        // );
                                         all.set(node.root, graph);
                                         return all;
                                     }, new Map())
@@ -303,12 +288,7 @@ const config = {
                             shareReplay(1)
                         );
 
-                    // return of(null);
-
                     const triggerInsert$ = parents$.pipe(
-                        // tap((parents) =>
-                        //     console.log(this.id, "parents", parents.length)
-                        // ),
                         switchMap(
                             (ids) =>
                                 evaluations.find({
@@ -323,17 +303,8 @@ const config = {
                                 }).$
                         ),
                         mergeMap((newEvaluations) => from(newEvaluations)),
-                        // tap((nEval) =>
-                        //     console.log("NEW EVAL, nEval.id", nEval.id)
-                        // ),
                         delay(100),
                         withLatestFrom(trees$, parents$),
-                        // tap(
-                        //     console.log.bind(
-                        //         console,
-                        //         "got new, trees, and parents$"
-                        //     )
-                        // ),
                         filter(([evaluation, trees]) => {
                             // console.log(
                             //     "check trees for root",
@@ -660,60 +631,6 @@ async function initializeDatabase(config) {
     return db;
 }
 
-export function queryThread(doc) {
-    return doc.collection
-        .find({
-            selector: {
-                parent: doc.id,
-                packets: {
-                    $exists: true,
-                },
-            },
-        })
-        .$.pipe(
-            switchMap((children) => {
-                if (!children?.length) {
-                    // console.log('no children');
-                    return of([]);
-                } else if (children.length === 1) {
-                    // console.log('1 child');
-                    return queryThread(children[0]);
-                } else {
-                    // console.log('2 children');
-                    return combineLatest(children.map(queryThread)).pipe(
-                        map((gc) => [gc])
-                    );
-                }
-            })
-        );
-}
-export const fullTree = (doc, seen = new Set()) => {
-    return doc.collection
-        .find({
-            selector: {
-                root: doc.id,
-                complete: true,
-            },
-        })
-        .$.pipe(
-            map((nodes) => {
-                const graph = new Graph();
-                for (const node of nodes) {
-                    graph.setNode(node.id, node);
-                }
-
-                for (const node of nodes) {
-                    const parents = node.parents || [];
-                    for (const parent of parents) {
-                        graph.setEdge(parent, node.id);
-                    }
-                }
-
-                return alg.topsort(graph).map((id) => graph.node(id).toJSON());
-            })
-        );
-};
-
 const partial = async (output, graph = new Graph()) => {
     graph.setNode(output.id, output);
     const parents = (await output.parents_) || [];
@@ -732,135 +649,3 @@ const partial = async (output, graph = new Graph()) => {
         )
     ).map((n) => n.toJSON());
 };
-
-const shouldInclude = async (doc, ancestorId, depth = 0) => {
-    let parents = await doc.parents_;
-    if (!depth) {
-        parents = parents.filter(({ id }) => id !== ancestorId);
-    }
-
-    if (!parents?.length) {
-        return false;
-    }
-
-    if (depth && parents.some((doc) => doc.id === ancestorId)) {
-        return true;
-    }
-
-    return (
-        await Promise.all(
-            parents.map((parent) => shouldInclude(parent, ancestorId, ++depth))
-        )
-    ).reduce((found, path) => found || path, false);
-};
-
-const flowid = "FLOW";
-const session = new Date().toDateString();
-
-// await db.evaluations.bulkUpsert([
-//     {
-//         id: "A",
-//         node: "node_A",
-//         root: "A",
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-//     {
-//         id: "B",
-//         node: "node_B",
-//         root: "A",
-//         parents: ["A"],
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-//     {
-//         id: "C",
-//         node: "node_C",
-//         root: "A",
-//         parents: ["A"],
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-//     {
-//         id: "D",
-//         node: "node_D",
-//         root: "A",
-//         parents: ["B", "C"],
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-//     {
-//         id: "E",
-//         node: "node_E",
-//         root: "A",
-//         parents: ["D"],
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-// ]);
-
-// const node = await db.nodes.upsert({
-//     id: "node_E",
-//     parents: ["node_D", "node_C", "node_B"],
-//     flow: flowid,
-// });
-
-// node.triggers$(session).subscribe(async (newEval) => {
-//     console.log("newTrigger", newEval);
-//     console.log(
-//         "newTrigger",
-//         await (await firstValueFrom(newEval.createEval())).getContext()
-//     ); //, newEval.toJSON());
-// });
-
-// node.collection.database.triggers.upsert({
-//     id: uuidv4(),
-//     node: node.id,
-//     flow: flowid,
-//     session,
-// });
-
-// await db.evaluations.bulkUpsert([
-//     {
-//         id: "D2",
-//         node: "node_D",
-//         root: "A",
-//         parents: ["B", "C"],
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-//     {
-//         id: "C2",
-//         node: "node_C",
-//         root: "A",
-//         parents: ["A"],
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-//     {
-//         id: "B2",
-//         node: "node_B",
-//         root: "A",
-//         parents: ["A"],
-//         complete: true,
-//         flow: flowid,
-//         session: session,
-//     },
-// ]);
-
-// // const root = await db.evaluation.findOne({ selector: { id: "A" } }).exec();
-
-// // fullTree(root).subscribe((tree) =>
-// //     console.log("tree", JSON.stringify(tree, null, 2))
-// // );
-
-// // const G = await db.evaluation.findOne({ selector: { id: "D" } }).exec();
-// // const isa = await partial(G);
-// // console.log("G isa", isa);
