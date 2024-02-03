@@ -18,6 +18,8 @@ import { load } from "https://deno.land/std@0.214.0/dotenv/mod.ts";
 
 await load({ export: true });
 
+export { db };
+
 export class Workflow {
     constructor(id, env = {}) {
         env.OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
