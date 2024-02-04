@@ -682,6 +682,12 @@ const partial = async (output, graph = new Graph()) => {
         proms.push(partial(parent, graph));
     }
 
+    if (!parents.length) {
+        const trigger = await output.trigger_;
+        graph.setNode(trigger.id, trigger);
+        graph.setEdge(trigger.id, output.id);
+    }
+
     await Promise.all(proms);
 
     return (
