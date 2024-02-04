@@ -246,7 +246,7 @@ const config = {
                         })
                         .exec();
 
-                    console.log("IS OUTPUT?", this.id, !children?.length);
+                    // console.log("IS OUTPUT?", this.id, !children?.length);
 
                     return !children?.length;
                 },
@@ -349,11 +349,11 @@ const config = {
                                         })
                                         .exec();
                                 if (!(await this.isAncestorOf(parent))) {
-                                    console.log(
-                                        parent.id,
-                                        "is necessary parent of",
-                                        this.id
-                                    );
+                                    // console.log(
+                                    //     parent.id,
+                                    //     "is necessary parent of",
+                                    //     this.id
+                                    // );
                                     necessaryParents.push(parent.id);
                                 }
                             }
@@ -384,6 +384,9 @@ const config = {
                             const run = Math.random();
                             for (const { to: evalId } of djkArray) {
                                 const evalNode = tree.node(evalId);
+                                if (evalNode.terminal) {
+                                    continue;
+                                }
                                 if (parents.includes(evalNode.node)) {
                                     const evals =
                                         triggers.get(evalNode.node) || [];
@@ -401,10 +404,10 @@ const config = {
                                             break;
                                         } else {
                                             allAccountedFor = true;
-                                            console.log(
-                                                "CHECK ALL ACCOUNTED FOR",
-                                                run
-                                            );
+                                            // console.log(
+                                            //     "CHECK ALL ACCOUNTED FOR",
+                                            //     run
+                                            // );
                                             for (const [
                                                 parent,
                                                 set,
@@ -436,21 +439,21 @@ const config = {
                                                     joinAncestors.map(
                                                         ({ id }) => id
                                                     ),
-                                                    set.length
+                                                    set
                                                 );
                                                 for (const ancestor of joinAncestors) {
                                                     const accountedFor =
                                                         await ancestor.isAccountedFor(
                                                             set
                                                         );
-                                                    console.log(
-                                                        "ACCOUNTED FOR",
-                                                        run,
-                                                        evaluation.id,
-                                                        ancestor.id,
-                                                        accountedFor,
-                                                        set.map(({ id }) => id)
-                                                    );
+                                                    // console.log(
+                                                    //     "ACCOUNTED FOR",
+                                                    //     run,
+                                                    //     evaluation.id,
+                                                    //     ancestor.id,
+                                                    //     accountedFor,
+                                                    //     set.map(({ id }) => id)
+                                                    // );
                                                     allAccountedFor =
                                                         allAccountedFor &&
                                                         accountedFor;
@@ -463,13 +466,12 @@ const config = {
                                                 //
                                             }
 
-                                            console.log(
-                                                "ALL ACCOUNTED?",
-                                                run,
-                                                allAccountedFor
-                                            );
-
                                             if (allAccountedFor) {
+                                                console.log(
+                                                    "ALL ACCOUNTED?",
+                                                    run,
+                                                    allAccountedFor
+                                                );
                                                 break;
                                             }
                                         }
@@ -609,12 +611,10 @@ const config = {
                         )
                     );
 
-                    console.log("NEXT ACCOUNTING", next);
                     if (
                         next.length &&
                         next.reduce((acc, accounted) => acc && accounted, true)
                     ) {
-                        console.log("ALL CHILDREN ACCOUNTED FOR");
                         return true;
                     }
 

@@ -13,6 +13,7 @@ const makeSubject = await db.nodes.upsert({
     config: {
         prompt: "please come up with a more specific subject matter (this is just a smoke test, don't over think it)",
         temperature: 0.7,
+        n: 5,
     },
 });
 
@@ -73,19 +74,31 @@ const improve = await db.nodes.upsert({
     },
 });
 
+const join = await db.nodes.upsert({
+    id: "join",
+    flow,
+    operator: "looplib/modules/gpt.mjs",
+    parents: ["is10"],
+    join: "makeSubject",
+    config: {
+        prompt: "please repeat all subjects and their 10 rated haiku",
+    },
+});
+
 initNode({ node: makeHaiku, session });
 initNode({ node: makeSubject, session });
 initNode({ node: judge, session });
 initNode({ node: is10, session });
 initNode({ node: isUnder10, session });
 initNode({ node: improve, session });
+initNode({ node: join, session });
 
 let total = 0;
 const haikusSub = db.evaluations
     .find({
         selector: {
             complete: true,
-            node: is10.id,
+            node: join.id,
         },
     })
     .$.pipe(
