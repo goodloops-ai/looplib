@@ -64,6 +64,7 @@ export const schemas = (program) =>
                             ])
                             .default("gpt-4-turbo-preview"),
                         key: z.string().default(OPENAI_API_KEY),
+                        guard: z.boolean().default(false),
                         n: z.number().default(1),
                     }),
                 }),
@@ -165,6 +166,43 @@ export const connect = (program) =>
         })
     );
 
+const guard = async (parameters, runner, evaluation) => {
+    runner.abort();
+    await evaluation.incrementalPatch({
+        complete: true,
+        terminal: !parameters.bool,
+    });
+};
+
+const guardTool = {
+    type: "tool",
+    force: true,
+    data: {
+        type: "function",
+        function: {
+            name: "answer_question",
+            function: guard.toString(),
+            parse: `JSON.parse(args)`,
+            description: "invoke this function to answer the users question",
+            parameters: {
+                type: "object",
+                description:
+                    "your answer to the last question posed by the user.",
+                properties: {
+                    explanation: {
+                        type: "string",
+                    },
+                    bool: {
+                        type: "boolean",
+                        description:
+                            "if the answer is YES, set to true. If the answer is NO, set to false",
+                    },
+                },
+            },
+        },
+    },
+};
+
 export const process = (program) => {
     return (input$) => {
         const config$ = combineLatest(
@@ -227,6 +265,9 @@ export const process = (program) => {
                     .flat()
                     .filter(({ type }) => type === "tool");
 
+                if (config.guard) {
+                    _tools.push(guardTool);
+                }
                 // console.log("MESSAGES", messages);
                 // console.log("TOOLS", _tools);
                 const fKey = _tools.length > 0 ? "runTools" : "stream";
@@ -249,10 +290,15 @@ export const process = (program) => {
                                 const fn = new Function(
                                     "parameters",
                                     "runner",
-                                    `return (${fnStr})(parameters,runner)`
+                                    "evaluation",
+                                    `return (${fnStr})(parameters,runner,evaluation)`
                                 );
 
-                                const res = await fn(parameters, runner);
+                                const res = await fn(
+                                    parameters,
+                                    runner,
+                                    evaluation
+                                );
                                 // console.log("result", res);
                                 return res;
                             },
@@ -308,7 +354,7 @@ export const process = (program) => {
                     );
                 }
 
-                const runner = openai.beta.chat.completions[fKey]({
+                const runOpts = {
                     stream: true,
                     messages,
                     model: config.model,
@@ -326,7 +372,11 @@ export const process = (program) => {
                               },
                           }
                         : {}),
-                });
+                };
+
+                // console.log(evaluation.node, runOpts);
+
+                const runner = openai.beta.chat.completions[fKey](runOpts);
 
                 const end$ = fromEvent(runner, "end").pipe(
                     tap(() => {

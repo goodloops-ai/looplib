@@ -213,6 +213,28 @@ const config = {
         nodes: {
             schema: nodesSchema,
             methods: {
+                isAncestorOf: async function (node, seen = new Set()) {
+                    // console.log("isAncestorOf", this.id, node.id);
+                    const parents = ((await node.parents_) || []).filter(
+                        (p) => !seen.has(p.id)
+                    );
+                    parents.forEach(({ id }) => seen.add(id));
+
+                    if (!parents?.length) {
+                        return false;
+                    }
+                    if (parents.some(({ id }) => id === this.id)) {
+                        return true;
+                    }
+
+                    return (
+                        await Promise.all(
+                            parents.map((parent) =>
+                                this.isAncestorOf(parent, seen)
+                            )
+                        )
+                    ).reduce((acc, item) => acc || item);
+                },
                 isOutput: async function () {
                     const children = await this.collection
                         .find({
@@ -316,6 +338,25 @@ const config = {
                         }),
                         mergeMap(async ([evaluation, trees, parents]) => {
                             const tree = trees.get(evaluation.root);
+                            const necessaryParents = [];
+                            for (const parentId of parents) {
+                                const parent =
+                                    await evaluation.collection.database.nodes
+                                        .findOne({
+                                            selector: {
+                                                id: parentId,
+                                            },
+                                        })
+                                        .exec();
+                                if (!(await this.isAncestorOf(parent))) {
+                                    console.log(
+                                        parent.id,
+                                        "is necessary parent of",
+                                        this.id
+                                    );
+                                    necessaryParents.push(parent.id);
+                                }
+                            }
                             // const mst = alg.prim(tree, () => 1);
                             // console.log(tree);
                             const djk = alg.dijkstra(
@@ -352,7 +393,7 @@ const config = {
                                     }
                                     triggers.set(evalNode.node, evals);
                                     if (
-                                        parents.every((parent) =>
+                                        necessaryParents.every((parent) =>
                                             triggers.has(parent)
                                         )
                                     ) {
@@ -444,7 +485,7 @@ const config = {
                             return [
                                 evaluation,
                                 triggers,
-                                parents,
+                                necessaryParents,
                                 allAccountedFor,
                             ];
                         }),
