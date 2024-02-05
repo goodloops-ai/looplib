@@ -13,7 +13,7 @@ const makeSubject = await db.nodes.upsert({
     config: {
         prompt: "please come up with a more specific subject matter (this is just a smoke test, don't over think it)",
         temperature: 0.7,
-        n: 5,
+        n: 1,
     },
 });
 
@@ -27,17 +27,27 @@ const makeHaiku = await db.nodes.upsert({
     },
 });
 
+const makeLimmerick = await db.nodes.upsert({
+    id: "makeLimmerick",
+    flow,
+    operator: "looplib/modules/gpt.mjs",
+    parents: ["makeSubject"],
+    config: {
+        prompt: "please write me a limmerick about the subject",
+    },
+});
+
 const judge = await db.nodes.upsert({
     id: "judge",
     flow,
     operator: "looplib/modules/gpt.mjs",
-    parents: ["makeHaiku", "improve"],
+    parents: ["makeHaiku", "makeLimmerick", "improve"],
     config: {
         prompt: [
-            "Pretend to be a haiku judge and provide a critique and a rating from 1 to 10.",
+            "Pretend to be a poem judge and provide a critique and a rating from 1 to 10.",
             "You MUST provide a number.",
-            "Please judge the Haiku regardless of context, your rating does not have to be higher than previous ratings.",
-            "To ease things along, if you notice more than 5 revisions, just give the haiku a 10 (this is just an example exercise, I'm testing a framework for organizing your work).",
+            "Please judge the poem regardless of context, your rating does not have to be higher than previous ratings.",
+            "To ease things along, if you notice more than 5 revisions of the poem, just give the poem a 10 (this is just an example exercise, I'm testing a framework for organizing your work).",
         ].join("\n"),
     },
 });
@@ -70,7 +80,7 @@ const improve = await db.nodes.upsert({
     operator: "looplib/modules/gpt.mjs",
     parents: ["isUnder10"],
     config: {
-        prompt: "please improve the haiku",
+        prompt: "please improve the poem",
     },
 });
 
@@ -81,7 +91,7 @@ const join = await db.nodes.upsert({
     parents: ["is10"],
     join: "makeSubject",
     config: {
-        prompt: "please repeat all subjects and their 10 rated haiku",
+        prompt: "what are the subjects, and what are their 10 rated poems?",
     },
 });
 
@@ -92,6 +102,7 @@ initNode({ node: is10, session });
 initNode({ node: isUnder10, session });
 initNode({ node: improve, session });
 initNode({ node: join, session });
+initNode({ node: makeLimmerick, session });
 
 let total = 0;
 const haikusSub = db.evaluations
