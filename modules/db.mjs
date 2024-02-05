@@ -417,9 +417,9 @@ const config = {
                                                         this.join
                                                     );
                                                 if (!joinTrigger) {
-                                                    console.log(
-                                                        "DID NOT FIND JOIN TRIGGER"
-                                                    );
+                                                    // console.log(
+                                                    //     "DID NOT FIND JOIN TRIGGER"
+                                                    // );
                                                     continue;
                                                 }
 
@@ -433,14 +433,14 @@ const config = {
                                                         })
                                                         .exec();
 
-                                                console.log(
-                                                    "JOIN ANCESTORS",
-                                                    run,
-                                                    joinAncestors.map(
-                                                        ({ id }) => id
-                                                    ),
-                                                    set
-                                                );
+                                                // console.log(
+                                                //     "JOIN ANCESTORS",
+                                                //     run,
+                                                //     joinAncestors.map(
+                                                //         ({ id }) => id
+                                                //     ),
+                                                //     set
+                                                // );
                                                 for (const ancestor of joinAncestors) {
                                                     const accountedFor =
                                                         await ancestor.isAccountedFor(
@@ -570,13 +570,13 @@ const config = {
                 },
                 isAccountedFor: async function (potentialDescendants) {
                     if (this.terminal) {
-                        console.log("FOUND TERMINAL");
+                        // console.log("FOUND TERMINAL");
                         return true;
                     }
                     const node = await this.node_;
 
                     if (await node.isOutput()) {
-                        console.log("FOUND OUTPUT");
+                        // console.log("FOUND OUTPUT");
                         return true;
                     }
 
@@ -592,7 +592,7 @@ const config = {
                         .exec();
 
                     if (!search.length) {
-                        console.log("WAITING FOR CHILD");
+                        // console.log("WAITING FOR CHILD");
                         return false;
                     }
 
@@ -601,7 +601,7 @@ const config = {
                             potentialDescendants.some((desc) => desc.id === id)
                         )
                     ) {
-                        console.log("FOUND IN SET");
+                        // console.log("FOUND IN SET");
                         return true;
                     }
 
