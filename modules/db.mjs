@@ -8,6 +8,9 @@ import {
     mergeMap,
     filter,
     from,
+    concatMap,
+    interval,
+    delayWhen,
     scan,
     delay,
     reduce,
@@ -168,43 +171,15 @@ const nodesSchema = {
             type: "object",
             additionalProperties: true,
         },
+
+        trigger: {
+            type: "string",
+            enum: ["any", "all"],
+            default: "all",
+        },
         // Add other properties as needed
     },
     required: ["id", "flow"],
-};
-
-const connectionSchema = {
-    version: 0,
-    type: "object",
-    primaryKey: "id",
-    properties: {
-        id: {
-            type: "string",
-            maxLength: 255,
-        },
-        flow: {
-            type: "string",
-            maxLength: 255,
-        },
-        source: {
-            type: "string",
-            maxLength: 255,
-        },
-        target: {
-            type: "string",
-            maxLength: 255,
-        },
-        connect: {
-            type: "string",
-        },
-        config: {
-            type: "object",
-            additionalProperties: true,
-        },
-        // Add other properties as needed
-    },
-    required: ["id", "flow", "source", "target"],
-    indexes: ["source", "target", "flow"],
 };
 
 const config = {
@@ -251,9 +226,13 @@ const config = {
                     return !children?.length;
                 },
                 triggers$: function (session) {
+                    // console.log("LISTEN FOR TRIGGERS", session, this.id);
                     const evaluations = this.collection.database.evaluations;
                     const parents$ = this.get$("parents").pipe(
                         filter(Boolean),
+                        // tap((parents) =>
+                        //     console.log(this.id, "parents", parents)
+                        // ),
                         shareReplay(1)
                     );
                     const trees$ = evaluations
@@ -310,7 +289,7 @@ const config = {
                             shareReplay(1)
                         );
 
-                    const triggerInsert$ = parents$.pipe(
+                    const newEvaluations$ = parents$.pipe(
                         switchMap(
                             (ids) =>
                                 evaluations.find({
@@ -325,6 +304,37 @@ const config = {
                                 }).$
                         ),
                         mergeMap((newEvaluations) => from(newEvaluations)),
+                        distinct(({ id }) => id),
+                        // tap((e) => console.log("got new eval", e)),
+                        shareReplay(1)
+                    );
+
+                    const anyTriggerInsert$ = newEvaluations$.pipe(
+                        withLatestFrom(this.get$("trigger")),
+                        filter(([_, trigger]) => trigger === "any"),
+                        map(([evaluation]) => evaluation),
+                        tap(async (evaluation) => {
+                            // console.log;
+                            const trigger =
+                                await this.collection.database.triggers.upsert({
+                                    id: uuidv4(),
+                                    flow: this.flow,
+                                    node: this.id,
+                                    root: evaluation.root,
+                                    session,
+                                    parents: [evaluation.id],
+                                });
+
+                            // console.log("MADE TRIGGER");
+                            return trigger;
+                        }),
+                        ignoreElements()
+                    );
+
+                    const allTriggerInsert$ = newEvaluations$.pipe(
+                        withLatestFrom(this.get$("trigger")),
+                        filter(([_, trigger]) => trigger === "all"),
+                        map(([evaluation]) => evaluation),
                         delay(100),
                         withLatestFrom(trees$, parents$),
                         filter(([evaluation, trees]) => {
@@ -467,11 +477,11 @@ const config = {
                                             }
 
                                             if (allAccountedFor) {
-                                                console.log(
-                                                    "ALL ACCOUNTED?",
-                                                    run,
-                                                    allAccountedFor
-                                                );
+                                                // console.log(
+                                                //     "ALL ACCOUNTED?",
+                                                //     run,
+                                                //     allAccountedFor
+                                                // );
                                                 break;
                                             }
                                         }
@@ -546,11 +556,15 @@ const config = {
                         .$.pipe(
                             filter(Boolean),
                             mergeMap((res) => from(res)),
-                            distinct(({ id }) => id)
-                            // tap((t) => console.log("GOT TRIGGER", t.id))
+                            distinct(({ id }) => id),
+                            tap((t) => console.log("GOT TRIGGER", t.id))
                         );
 
-                    return merge(triggerInsert$, triggers$);
+                    return merge(
+                        anyTriggerInsert$,
+                        allTriggerInsert$,
+                        triggers$
+                    );
                 },
             },
         },
@@ -644,6 +658,70 @@ const config = {
                         })
                     );
                 },
+                getContext: async function () {
+                    return await partial(this);
+                },
+                findInContext: async function ({ node }) {
+                    const context = await this.getContext();
+                    return context
+                        .reverse()
+                        .find(({ node: _node }) => _node === node);
+                },
+                findAllInContext: async function ({ node }) {
+                    const context = await this.getContext();
+                    return context
+                        .reverse()
+                        .filter(({ node: _node }) => _node === node);
+                },
+                sendOutput: async function (packets, terminal = false) {
+                    if (!packets) {
+                        terminal = true;
+                    }
+                    if (!Array.isArray(packets)) {
+                        packets = [[packets]];
+                    } else if (!Array.isArray(packets[0])) {
+                        packets = [packets];
+                    }
+                    let i = 0;
+                    console.log(
+                        "got packets",
+                        this.id,
+                        this.flow,
+                        this.node,
+                        this.root,
+                        this.session,
+                        packets.length
+                    );
+                    if (terminal) {
+                        this.collection.database.evaluations.upsert({
+                            id: uuidv4(),
+                            flow: this.flow,
+                            node: this.node,
+                            root: this.root || this.id,
+                            session: this.session,
+                            trigger: this.id,
+                            parents: this.parents,
+                            complete: true,
+                            packets: [],
+                            terminal,
+                        });
+                    } else {
+                        await this.collection.database.evaluations.bulkUpsert(
+                            packets.map((packets) => ({
+                                id: uuidv4(),
+                                flow: this.flow,
+                                node: this.node,
+                                parents: this.parents,
+                                root: this.root || this.id,
+                                session: this.session,
+                                trigger: this.id,
+                                complete: true,
+                                packets,
+                            }))
+                        );
+                    }
+                    console.log("sent outputs");
+                },
             },
         },
     },
@@ -656,7 +734,7 @@ async function initializeDatabase(config) {
     if (typeof indexedDB !== "undefined") {
         db = await createRxDatabase({
             name: config.dbName,
-            storage: getRxStorageDexie(),
+            storage: getRxStorageMemory(),
             localDocuments: true,
         });
     } else {

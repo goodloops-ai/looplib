@@ -1,4 +1,4 @@
-import { db, process as flow, getIO, queryThread } from "./modules/flow.mjs";
+import { db, process as flow, initNode } from "./modules/flow.mjs";
 import {
     firstValueFrom,
     merge,
@@ -9,34 +9,44 @@ import {
     Subject,
     distinctUntilChanged,
     scan,
+    map,
+    mergeMap,
+    from,
+    distinct,
+    take,
 } from "rxjs";
 import { v4 as uuidv4 } from "uuid";
 import { deepEqual } from "fast-equals";
-import { take } from "npm:rxjs@^7.8.1";
 import filenamify from "filenamify";
-import { load } from "https://deno.land/std@0.214.0/dotenv/mod.ts";
-
-await load({ export: true });
-
-export { db };
-
+try {
+    const { load } = await import(
+        "https://deno.land/std@0.214.0/dotenv/mod.ts"
+    );
+    await load({ export: true });
+} catch (e) {}
+const session = new Date().getTime();
 export class Workflow {
     constructor(id, env = {}) {
-        env.OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+        env.OPENAI_API_KEY =
+            env.OPENAI_API_KEY ||
+            window.Deno?.env?.get?.("OPENAI_API_KEY") ||
+            localStorage.getItem("OPENAI_API_KEY") ||
+            prompt("OPENAI KEY:");
+
         this.id = id;
         this.ready = Promise.all([
-            db.nodes
-                .upsert({
-                    id,
-                    process: "looplib/modules/flow.mjs",
-                })
-                .then((program) => {
-                    this.program = program;
-                    this.flowEvents$ = new Subject();
-                    this.subscription = this.flowEvents$
-                        .pipe(flow(this.program))
-                        .subscribe();
-                }),
+            // db.nodes
+            //     .upsert({
+            //         id,
+            //         operator: "looplib/modules/flow.mjs",
+            //     })
+            //     .then((program) => {
+            //         this.program = program;
+            //         this.flowEvents$ = new Subject();
+            //         this.subscription = this.flowEvents$
+            //             .pipe(flow(this.program))
+            //             .subscribe();
+            //     }),
             db.upsertLocal("ENV", env),
         ]);
 
@@ -45,17 +55,35 @@ export class Workflow {
 
     addNode(id, prompt, config = {}) {
         // console.log("import.meta.url", import.meta.url);
-        this.jobs = this.jobs.then(() => {
-            return db.nodes.upsert({
-                id,
-                flow: this.program.id,
-                process: "looplib/modules/gpt.mjs",
-                config: {
-                    ...config,
-                    prompt,
-                },
-            });
-        });
+        const data =
+            typeof prompt === "function"
+                ? {
+                      id,
+                      flow: this.id,
+                      operator: prompt.toString(),
+                      join: typeof config === "string" ? config : undefined,
+                  }
+                : {
+                      id,
+                      flow: this.id,
+                      operator: "looplib/modules/gpt.mjs",
+                      join: typeof config === "string" ? config : undefined,
+                      config: {
+                          ...config,
+                          prompt,
+                      },
+                  };
+
+        this.jobs = this.jobs
+            .then(() => {
+                return db.nodes.upsert(data);
+            })
+            .then(async (node) => {
+                return await new Promise((r) =>
+                    setTimeout(() => r(node), 1000)
+                );
+            })
+            .then((node) => initNode({ node, session }));
 
         return this;
     }
@@ -63,18 +91,37 @@ export class Workflow {
     connect(source, target, guard) {
         this.jobs = this.jobs.then(async () => {
             await new Promise((r) => setTimeout(r, 1000));
-            return db.connections.upsert({
-                id: uuidv4(),
-                flow: this.program.id,
-                source,
-                target,
-                connect: guard ? "looplib/modules/gpt.mjs" : undefined,
-                config: guard
-                    ? {
-                          prompt: guard,
-                      }
-                    : undefined,
-            });
+            const targetNode = await db.nodes
+                .findOne({
+                    selector: {
+                        id: target,
+                    },
+                })
+                .exec();
+            if (guard) {
+                const guardNode = await db.nodes.upsert({
+                    id: uuidv4(),
+                    flow: this.id,
+                    parents: [source],
+                    operator: "looplib/modules/gpt.mjs",
+                    config: {
+                        prompt: guard,
+                        guard: true,
+                    },
+                });
+
+                await initNode({ node: guardNode, session });
+
+                await targetNode.incrementalPatch({
+                    parents: (targetNode.parents || []).concat([guardNode.id]),
+                });
+            } else {
+                console.log("set parents", targetNode.id, source);
+                await targetNode.incrementalPatch({
+                    parents: (targetNode.parents || []).concat([source]),
+                });
+                console.log("set parent", targetNode.id);
+            }
         });
 
         return this;
@@ -83,60 +130,80 @@ export class Workflow {
     async execute(prompt) {
         await this.jobs.catch((e) => {
             console.error(e);
-            Deno.exit(1);
+            // Deno.exit(1);
         });
 
-        const inputs = await firstValueFrom(
-            getIO(this.program).pipe(
-                switchMap(({ inputs }) => db.nodes.findByIds(inputs).exec())
-            )
-        );
+        const input = await db.nodes
+            .findOne({
+                selector: {
+                    flow: this.id,
+                    parents: {
+                        $exists: false,
+                    },
+                },
+            })
+            .exec();
 
-        for (const [id, node] of inputs) {
-            // console.log(node);
-            await node.incrementalPatch({
-                input: prompt
-                    ? [
-                          {
-                              type: "message",
-                              data: {
-                                  role: "user",
-                                  content: prompt,
-                              },
-                          },
-                      ]
-                    : [],
-            });
+        const allNodes = await db.nodes
+            .find({
+                selector: {
+                    flow: this.id,
+                },
+            })
+            .exec();
+
+        const outputs = [];
+
+        for (const n of allNodes) {
+            const downstream = await db.nodes
+                .findOne({
+                    selector: {
+                        flow: this.id,
+                        parents: {
+                            $in: [n.id],
+                        },
+                    },
+                })
+                .exec();
+
+            if (!downstream) {
+                outputs.push(n.id);
+            }
         }
+        await db.triggers.upsert({
+            id: uuidv4(),
+            node: input.id,
+            flow: this.id,
+            root: "root1",
+            session,
+            packets: prompt
+                ? [
+                      {
+                          type: "message",
+                          data: {
+                              role: "user",
+                              content: prompt,
+                          },
+                      },
+                  ]
+                : [],
+        });
 
-        const $ = getIO(this.program).pipe(
-            filter(({ outputs }) => {
-                // console.log(
-                // 	'got outputs',
-                // 	outputs.map(id => id),
-                // );
-                return outputs.length;
-            }),
-            switchMap(({ outputs }) =>
-                merge(
-                    ...outputs.map(
-                        (id) =>
-                            db.states.find({
-                                selector: {
-                                    entity: id,
-                                    packets: {
-                                        $exists: true,
-                                    },
-                                },
-                            }).$
-                    )
-                )
-            ),
-            filter((docs) => docs?.length),
-            switchMap((docs) =>
-                merge(...docs.map((doc) => doc.get$("packets")))
-            )
-        );
+        // console.log(nod
+        const $ = db.evaluations
+            .find({
+                selector: {
+                    node: {
+                        $in: outputs,
+                    },
+                    complete: true,
+                },
+            })
+            .$.pipe(
+                mergeMap((all) => from(all)),
+                distinct(({ id }) => id),
+                map((evaluation) => evaluation.toJSON())
+            );
 
         return {
             $,
@@ -145,24 +212,55 @@ export class Workflow {
     }
 
     output(path) {
-        const sessionDate = new Date();
-
-        this.jobs = this.jobs.then(() => {
-            db.states
+        this.jobs = this.jobs.then(async () => {
+            const outputs = [];
+            const allNodes = await db.nodes
                 .find({
                     selector: {
-                        flow: this.program.id,
-                        parent: {
-                            $exists: false,
-                        },
+                        flow: this.id,
                     },
                 })
-                .$.pipe(switchMap((docs) => merge(...docs.map(queryThread))))
-                .subscribe((thread) => {
+                .exec();
+            for (const n of allNodes) {
+                const downstream = await db.nodes
+                    .findOne({
+                        selector: {
+                            flow: this.id,
+                            parents: {
+                                $in: [n.id],
+                            },
+                        },
+                    })
+                    .exec();
+
+                if (!downstream) {
+                    outputs.push(n.id);
+                }
+            }
+
+            db.evaluations
+                .find({
+                    selector: {
+                        flow: this.id,
+                        node: {
+                            $in: outputs,
+                        },
+                        complete: true,
+                    },
+                })
+                .$.pipe(
+                    mergeMap((all) => from(all)),
+                    distinct(({ id }) => id)
+                )
+                .subscribe((evaluation) => {
+                    const sessionDate = new Date();
+                    const thread = evaluation.toJSON();
                     const json = JSON.stringify(thread, null, 2);
                     const encoder = new TextEncoder();
                     Deno.writeFileSync(
-                        `${path}-${filenamify(sessionDate.toString())}.json`,
+                        `${path}-${evaluation.node}-${filenamify(
+                            sessionDate.toString()
+                        )}.json`,
                         encoder.encode(json)
                     );
                 });
@@ -175,7 +273,7 @@ export class Workflow {
         this.jobs.then(() => {
             const incomplete$ = db.states.find({
                 selector: {
-                    flow: this.program.id,
+                    flow: this.id,
                     complete: false,
                 },
             }).$;

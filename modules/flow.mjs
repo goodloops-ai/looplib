@@ -29,6 +29,8 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "./db.mjs";
 
+export { db };
+
 const schemas = (program) => {
     return of(
         z.union([
@@ -160,14 +162,43 @@ export const process = (program) => {
     };
 };
 
-export const initNode = ({ node, session }) => {
-    const operator$ = node.get$("operator").pipe(
-        filter(Boolean),
-        switchMap((lib) => import(lib)),
-        map((module) => module.default(node))
-    );
+const importModuleOrString = (node) => async (str) => {
+    try {
+        const mod = await import(str);
+        return mod.default(node);
+    } catch (e) {
+        const moduleStr = [
+            `import _ from 'https://esm.sh/lodash'`,
+            `export default ${str}`,
+        ].join("\n");
+        const blob = new Blob([moduleStr], { type: "application/javascript" });
+        const url = URL.createObjectURL(blob);
+        const mod = await import(url);
+        return pipe(
+            mergeMap((trigger) =>
+                of(trigger).pipe(
+                    mergeMap(mod.default, 100),
+                    tap((packets) => {
+                        trigger.sendOutput(packets);
+                    })
+                )
+            )
+        );
+    }
+};
 
-    const triggers$ = node.triggers$(session).pipe(shareReplay(1));
+export const initNode = ({ node, session }) => {
+    console.log("init node", node.id);
+    const operator$ = node
+        .get$("operator")
+        .pipe(filter(Boolean), switchMap(importModuleOrString(node)));
+
+    const triggers$ = node.triggers$(session).pipe(
+        tap((trigger) =>
+            console.log("got trigger", trigger.id, trigger.parents)
+        ),
+        shareReplay(1)
+    );
 
     const output$ = operator$
         .pipe(switchMap((operator) => triggers$.pipe(operator)))
