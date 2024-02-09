@@ -271,7 +271,7 @@ export class Workflow {
 
     log() {
         this.jobs.then(() => {
-            const incomplete$ = db.states.find({
+            const incomplete$ = db.evaluations.find({
                 selector: {
                     flow: this.id,
                     complete: false,
@@ -304,7 +304,7 @@ export class Workflow {
                         )
                     ),
                     switchMap((docs) =>
-                        merge(...docs.map((doc) => doc.get$("data"))).pipe(
+                        merge(...docs.map((doc) => doc.get$("state"))).pipe(
                             skip(1)
                         )
                     ),

@@ -194,9 +194,9 @@ export const initNode = ({ node, session }) => {
         .pipe(filter(Boolean), switchMap(importModuleOrString(node)));
 
     const triggers$ = node.triggers$(session).pipe(
-        tap((trigger) =>
-            console.log("got trigger", trigger.id, trigger.parents)
-        ),
+        // tap((trigger) =>
+        //     console.log("got trigger", trigger.id, trigger.parents)
+        // ),
         shareReplay(1)
     );
 

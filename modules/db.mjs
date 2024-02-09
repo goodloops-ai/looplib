@@ -556,8 +556,8 @@ const config = {
                         .$.pipe(
                             filter(Boolean),
                             mergeMap((res) => from(res)),
-                            distinct(({ id }) => id),
-                            tap((t) => console.log("GOT TRIGGER", t.id))
+                            distinct(({ id }) => id)
+                            // tap((t) => console.log("GOT TRIGGER", t.id))
                         );
 
                     return merge(
@@ -683,15 +683,15 @@ const config = {
                         packets = [packets];
                     }
                     let i = 0;
-                    console.log(
-                        "got packets",
-                        this.id,
-                        this.flow,
-                        this.node,
-                        this.root,
-                        this.session,
-                        packets.length
-                    );
+                    // console.log(
+                    //     "got packets",
+                    //     this.id,
+                    //     this.flow,
+                    //     this.node,
+                    //     this.root,
+                    //     this.session,
+                    //     packets.length
+                    // );
                     if (terminal) {
                         this.collection.database.evaluations.upsert({
                             id: uuidv4(),
@@ -720,7 +720,7 @@ const config = {
                             }))
                         );
                     }
-                    console.log("sent outputs");
+                    // console.log("sent outputs");
                 },
             },
         },

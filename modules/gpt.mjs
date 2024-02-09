@@ -70,6 +70,7 @@ export const schemas = (program) =>
                         key: z.string().default(OPENAI_API_KEY),
                         guard: z.boolean().default(false),
                         n: z.number().default(1),
+                        branch: z.boolean().default(false),
                         includeAllContext: z.boolean().default(false),
                     }),
                 }),
@@ -175,11 +176,11 @@ const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
 
     const end$ = fromEvent(runner, "end").pipe(
         map(() => runner),
-        tap(() => console.log("END", ++ends)),
+        // tap(() => console.log("END", ++ends)),
         timeout({
             each: 60 * 1000,
             with: () => {
-                console.log("timeout", retries);
+                // console.log("timeout", retries);
                 timeout$.next(true);
                 if (retries < 5) {
                     return retryRunner(fn, runOpts, evaluation, ++retries);
@@ -222,7 +223,7 @@ const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
                     terminal: true,
                 });
             } else {
-                console.log("complete");
+                // console.log("complete");
                 evaluation.incrementalPatch({
                     packets: runner.messages
                         .slice(runOpts.messages.length - 1)
@@ -443,22 +444,36 @@ export const process = (program) => {
                             })
                         ).pipe(
                             switchMap((res) => {
-                                const evals$ = concat(
-                                    of(evaluation),
-                                    trigger.createEvals(config.n - 1)
-                                );
+                                if (config.branch) {
+                                    const evals$ = concat(
+                                        of(evaluation),
+                                        trigger.createEvals(config.n - 1)
+                                    );
 
-                                const pre = [messages.pop()];
+                                    const pre = [messages.pop()];
 
-                                const messages$ = from(
-                                    res.choices.map(({ message }) =>
-                                        pre.concat([message])
-                                    )
-                                );
+                                    const messages$ = from(
+                                        res.choices.map(({ message }) =>
+                                            pre.concat([message])
+                                        )
+                                    );
 
-                                return zip(messages$, evals$);
+                                    return zip(messages$, evals$);
+                                } else {
+                                    const evals$ = of(evaluation);
+
+                                    const msgs$ = of(
+                                        [messages.pop()].concat(
+                                            res.choices.map(
+                                                ({ message }) => message
+                                            )
+                                        )
+                                    );
+
+                                    return zip(msgs$, evals$);
+                                }
                             }),
-                            take(config.n),
+                            take(config.branch ? config.n : 1),
                             tap(([messages, evaluation]) =>
                                 evaluation.incrementalPatch({
                                     state: {
