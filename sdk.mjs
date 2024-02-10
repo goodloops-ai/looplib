@@ -257,13 +257,13 @@ export class Workflow {
                     const thread = evaluation.toJSON();
                     const json = JSON.stringify(thread, null, 2);
                     const encoder = new TextEncoder();
+                    const nonce = Math.random().toString(36).substring(2, 15);
                     Deno.writeFileSync(
                         `${path}-${evaluation.node}-${filenamify(
                             sessionDate.toString()
-                        )}.json`,
+                        )}-${nonce}.json`,
                         encoder.encode(json)
                     );
-                });
         });
 
         return this;
