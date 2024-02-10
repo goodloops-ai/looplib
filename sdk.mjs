@@ -264,6 +264,7 @@ export class Workflow {
                         )}-${nonce}.json`,
                         encoder.encode(json)
                     );
+                });
         });
 
         return this;
