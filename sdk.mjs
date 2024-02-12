@@ -99,16 +99,29 @@ export class Workflow {
                 })
                 .exec();
             if (guard) {
-                const guardNode = await db.nodes.upsert({
-                    id: uuidv4(),
-                    flow: this.id,
-                    parents: [source],
-                    operator: "looplib/modules/gpt.mjs",
-                    config: {
-                        prompt: guard,
-                        guard: true,
-                    },
-                });
+                const data =
+                    typeof prompt === "function"
+                        ? {
+                              id: uuidv4(),
+                              flow: this.id,
+                              parents: [source],
+                              operator: prompt.toString(),
+                              join:
+                                  typeof config === "string"
+                                      ? config
+                                      : undefined,
+                          }
+                        : {
+                              id: uuidv4(),
+                              flow: this.id,
+                              parents: [source],
+                              operator: "looplib/modules/gpt.mjs",
+                              config: {
+                                  ...config,
+                                  prompt,
+                              },
+                          };
+                const guardNode = await db.nodes.upsert(data);
 
                 await initNode({ node: guardNode, session });
 
