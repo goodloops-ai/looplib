@@ -118,6 +118,7 @@ export class Workflow {
                               operator: "looplib/modules/gpt.mjs",
                               config: {
                                   ...config,
+                                  guard: true,
                                   prompt,
                               },
                           };
