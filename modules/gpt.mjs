@@ -55,18 +55,7 @@ export const schemas = (program) =>
                             .max(1)
                             .step(0.1)
                             .default(0.3),
-                        model: z
-                            .enum([
-                                "gpt-4",
-                                "gpt-4-turbo-preview",
-                                "gpt-4-0125-preview",
-                                "gpt-3.5-turbo-0613",
-                                "gpt-4-1106-preview",
-                                "gpt-3.5-turbo-1106",
-                                "gpt-3.5-turbo-16k",
-                                "gpt-4-vision-preview",
-                            ])
-                            .default("gpt-4-0125-preview"),
+                        model: z.string().default("gpt-4-0125-preview"),
                         key: z.string().default(OPENAI_API_KEY),
                         guard: z.boolean().default(false),
                         n: z.number().default(1),
