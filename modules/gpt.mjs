@@ -213,7 +213,7 @@ const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
     return merge(end$, deltas$).pipe(
         take(1),
         tap((runner) => {
-            if (runner.messages.length === runOpts.messages.length) {
+            if (!runner || runner.messages.length === runOpts.messages.length) {
                 console.log("failed");
                 evaluation.incrementalPatch({
                     packets: [
@@ -518,7 +518,7 @@ export const process = (program) => {
                         evaluation
                     );
                 },
-                100
+                50
             ),
             catchError((e) => {
                 console.log("error", e);
