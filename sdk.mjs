@@ -23,6 +23,7 @@ try {
         "https://deno.land/std@0.214.0/dotenv/mod.ts"
     );
     await load({ export: true });
+    console.log("loaded .env", window.Deno?.env?.get?.("OPENAI_API_KEY"));
 } catch (e) {}
 const session = new Date().getTime();
 export class Workflow {
@@ -30,8 +31,7 @@ export class Workflow {
         env.OPENAI_API_KEY =
             env.OPENAI_API_KEY ||
             window.Deno?.env?.get?.("OPENAI_API_KEY") ||
-            localStorage.getItem("OPENAI_API_KEY") ||
-            prompt("OPENAI KEY:");
+            localStorage.getItem("OPENAI_API_KEY");
 
         this.id = id;
         this.ready = Promise.all([
@@ -88,7 +88,7 @@ export class Workflow {
         return this;
     }
 
-    connect(source, target, guard) {
+    connect(source, target, prompt, config = {}) {
         this.jobs = this.jobs.then(async () => {
             await new Promise((r) => setTimeout(r, 1000));
             const targetNode = await db.nodes
@@ -98,7 +98,7 @@ export class Workflow {
                     },
                 })
                 .exec();
-            if (guard) {
+            if (prompt) {
                 const data =
                     typeof prompt === "function"
                         ? {
