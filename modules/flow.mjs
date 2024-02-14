@@ -177,7 +177,7 @@ const importModuleOrString = (node) => async (str) => {
         return pipe(
             mergeMap((trigger) =>
                 of(trigger).pipe(
-                    mergeMap(mod.default, 100),
+                    mergeMap(async (arg) => await mod.default(arg), 100),
                     tap((packets) => {
                         trigger.sendOutput(packets);
                     })
@@ -205,58 +205,6 @@ export const initNode = ({ node, session }) => {
         .subscribe();
     return output$;
 };
-
-const getThread = async (doc, rest) => {
-    if (!doc.parent) {
-        return [];
-    }
-
-    const parent = await doc.collection
-        .findOne({
-            selector: {
-                id: doc.parent,
-            },
-        })
-        .exec();
-
-    return [].concat(await getThread(parent)).concat([
-        {
-            packets: doc.packets,
-            state: doc.id,
-        },
-    ]);
-};
-
-export function queryThread(doc) {
-    return doc.collection
-        .find({
-            selector: {
-                parent: doc.id,
-                packets: {
-                    $exists: true,
-                },
-            },
-        })
-        .$.pipe(
-            switchMap((children) => {
-                if (!children?.length) {
-                    // console.log('no children');
-                    return of([]);
-                } else if (children.length === 1) {
-                    // console.log('1 child');
-                    return queryThread(children[0]);
-                } else {
-                    // console.log('2 children');
-                    return combineLatest(children.map(queryThread)).pipe(
-                        map((gc) => [gc])
-                    );
-                }
-            }),
-            map((progeny) => {
-                return [doc.toJSON()].concat(progeny);
-            })
-        );
-}
 
 // // /* TODO:
 // // - decide on a better name for program/doc
