@@ -1,10 +1,63 @@
 import { assertEquals } from "https://deno.land/std@0.114.0/testing/asserts.ts";
-import { createDag, Trigger, Operable } from "./operable.mjs";
+import {
+    createDag,
+    Trigger,
+    Operable,
+    inSerial,
+    inParallel,
+} from "./operable.mjs";
 import { Graph } from "graphlib";
 import { v4 } from "uuid";
-import { BehaviorSubject, firstValueFrom, skip } from "rxjs";
+import { BehaviorSubject, firstValueFrom, skip, of, tap } from "rxjs";
 import { z } from "zod";
+import { assertEquals } from "https://deno.land/std/testing/asserts.ts";
 
+Deno.test("inSerial should process triggers in sequence", async () => {
+    const operable = new Operable(() => {});
+    const state = { previous: null };
+    const coreOperator = tap((inputTrigger) => {
+        inputTrigger.payload += 1;
+    });
+
+    const inputTriggers = Array.from({ length: 5 }, (_, i) => {
+        return { payload: i };
+    });
+
+    const result = await of(...inputTriggers)
+        .pipe(inSerial(operable, coreOperator, state))
+        .toPromise();
+
+    assertEquals(result, [
+        { payload: 1 },
+        { payload: 2 },
+        { payload: 3 },
+        { payload: 4 },
+        { payload: 5 },
+    ]);
+});
+
+Deno.test("inParallel should process triggers concurrently", async () => {
+    const operable = new Operable(() => {});
+    const coreOperator = tap((inputTrigger) => {
+        inputTrigger.payload += 1;
+    });
+
+    const inputTriggers = Array.from({ length: 5 }, (_, i) => {
+        return { payload: i };
+    });
+
+    const result = await of(...inputTriggers)
+        .pipe(inParallel(operable, coreOperator))
+        .toPromise();
+
+    assertEquals(result, [
+        { payload: 1 },
+        { payload: 2 },
+        { payload: 3 },
+        { payload: 4 },
+        { payload: 5 },
+    ]);
+});
 Deno.test("Trigger.find method", async () => {
     // Create Operables
     const operable1 = new Operable(() => {});

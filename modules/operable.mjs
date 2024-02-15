@@ -223,7 +223,7 @@ function closestSharedAncestor(operables) {
     return null;
 }
 
-function inSerial(operable, coreOperator, state) {
+export function inSerial(operable, coreOperator, state) {
     return concatMap((inputTrigger) => {
         inputTrigger.previous = state.previous;
         return of(inputTrigger).pipe(
@@ -236,7 +236,7 @@ function inSerial(operable, coreOperator, state) {
     });
 }
 
-function inParallel(operable, coreOperator) {
+export function inParallel(operable, coreOperator) {
     return mergeMap((inputTrigger) => {
         return of(inputTrigger).pipe(
             coreOperator,
