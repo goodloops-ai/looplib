@@ -262,8 +262,8 @@ export function withTriggerGraph(operable, coreOperator) {
             switchMap((firstTrigger) =>
                 remainingTriggers$.pipe(
                     firstTrigger.checkedPrevious
-                        ? inSerial(state)
-                        : inParallel(state)
+                        ? inSerial(operable, coreOperator, state)
+                        : inParallel(operable, coreOperator)
                 )
             )
         );
