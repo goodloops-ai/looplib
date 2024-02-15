@@ -20,12 +20,12 @@ import {
     concat,
     ReplaySubject,
     Subject,
-    debounceTime,
 } from "rxjs";
 
 import { Graph, alg } from "graphlib";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
+import isPojo from "is-pojo";
 
 export class ConfigurableOperator {
     constructor(operatorFactory, config) {
@@ -225,6 +225,7 @@ function closestSharedAncestor(operables) {
 
 export function inSerial(operable, coreOperator, state) {
     return concatMap((inputTrigger) => {
+        console.log("INPUT TRIGGER", inputTrigger);
         inputTrigger.previous = state.previous;
         return of(inputTrigger).pipe(
             coreOperator,
@@ -245,7 +246,7 @@ export function inParallel(operable, coreOperator) {
     });
 }
 
-function withTriggerGraph(operable, coreOperator) {
+export function withTriggerGraph(operable, coreOperator) {
     return (input$) => {
         const state = { previous: null };
         const source$ = input$.pipe(lockTrigger(operable));
@@ -293,6 +294,10 @@ function isAsyncGenerator(operableCore) {
     );
 }
 
+function isTrigger(trigger) {
+    return trigger instanceof Trigger;
+}
+
 function isZodSchema(operableCore) {
     return z.instanceof(operableCore);
 }
@@ -301,36 +306,47 @@ function isOperable(operableCore) {
     return operableCore instanceof Operable;
 }
 
-function toTriggers(operable, ...from) {
+function toTriggers(operable, ...fromTriggers) {
     return pipe(
         mergeMap((output) => {
             let output$ =
-                isPojo(output) || !!output ? of(output) : from(output);
+                isPojo(output) || !!output || !output
+                    ? of(output)
+                    : from(output);
 
             return output$.pipe(
-                map((payload) => new Trigger(payload, operable, ...from)),
-                unlockTrigger(operable, ...from)
+                map(
+                    (payload) => new Trigger(payload, operable, ...fromTriggers)
+                ),
+                unlockTrigger(operable, ...fromTriggers)
             );
         })
     );
 }
 
+function addToBehaviorSubject(behaviorSubject, ...values) {
+    behaviorSubject.next(behaviorSubject.getValue().concat(values));
+}
+
+function removeFromBehaviorSubject(behaviorSubject, ...values) {
+    behaviorSubject.next(
+        behaviorSubject.getValue().filter((value) => !values.includes(value))
+    );
+}
+
 function lockTrigger(operable) {
     return tap((trigger) => {
-        trigger.locks$.next(trigger.locks$.getValue().concat([operable]));
+        addToBehaviorSubject(trigger.locks$, operable);
     });
 }
 
 function unlockTrigger(operable, ...from) {
+    console.log("UNLOCK", operable, from);
     return finalize(() =>
         setTimeout(
             () =>
                 from.forEach((trigger) => {
-                    trigger.locks$.next(
-                        trigger.locks$
-                            .getValue()
-                            .filter((lock) => lock !== operable)
-                    );
+                    removeFromBehaviorSubject(trigger.locks$, operable);
                 }),
             0
         )
@@ -354,10 +370,8 @@ export class Trigger {
         this.from$.pipe(createDag(this, "from$")).subscribe(this.fromDag$);
         this.to$.pipe(createDag(this, "to$")).subscribe(this.toDag$);
         this.payload = payload;
-        this.from$.next(from);
-        from.forEach((trigger) =>
-            trigger.to$.next(trigger.to$.getValue().concat([this]))
-        );
+        addToBehaviorSubject(this.from$, ...from);
+        from.forEach((trigger) => addToBehaviorSubject(trigger.to$, this));
     }
 
     get previous() {
