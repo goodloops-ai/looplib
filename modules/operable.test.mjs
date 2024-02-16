@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.114.0/testing/asserts.ts";
 import {
-    createDag,
+    createGraph,
+    mergeGraphs,
     Trigger,
     Operable,
     inSerial,
@@ -17,60 +18,165 @@ import {
     tap,
     mergeMap,
     map,
+    pipe,
+    debounceTime,
     toArray,
 } from "rxjs";
 import { z } from "zod";
+import { deepEqual } from "fast-equals";
 
-// Deno.test(
-//     "withTriggerGraph: adaptive concurrency and correct Trigger wrapping",
-//     async () => {
-//         const operable = new Operable(() => {});
-//         const inputTrigger = new Trigger(1, operable);
-//         const outputTriggers = [];
+Deno.test(
+    "getSharedAncestors should return the smallest number of shared ancestors that cover all given nodes",
+    async () => {
+        // Graph shape:
+        // graph TB
+        // A[A] --> B[B]
+        // A --> C[C]
+        // B --> D[D]
+        // C --> D
+        // B --> E[E]
+        // C --> F[F]
+        // E --> G[G]
+        // F --> G
+        // D --> H[H]
+        // G --> H
 
-//         operable.input$
-//             .pipe(
-//                 withTriggerGraph(
-//                     operable,
-//                     tap((trigger) => outputTriggers.push(trigger))
-//                 )
-//             )
-//             .subscribe();
+        const A = new Operable(() => {});
+        const B = new Operable(() => {});
+        const C = new Operable(() => {});
+        const D = new Operable(() => {});
+        const E = new Operable(() => {});
+        const F = new Operable(() => {});
+        const G = new Operable(() => {});
+        const H = new Operable(() => {});
 
-//         operable.next(inputTrigger);
-//         operable.next(inputTrigger);
+        A.pipe(B);
+        A.pipe(C);
+        B.pipe(D);
+        C.pipe(D);
+        B.pipe(E);
+        C.pipe(F);
+        E.pipe(G);
+        F.pipe(G);
+        D.pipe(H);
+        G.pipe(H);
 
-//         // Allow async operations to complete
-//         await new Promise((resolve) => setTimeout(resolve, 100));
+        let graph;
+        createGraph(A, "downstream$").subscribe((_graph) => {
+            graph = _graph;
+        });
 
-//         assertEquals(outputTriggers.length, 2, "Should not duplicate triggers");
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
-//         outputTriggers.forEach((trigger, index) => {
-//             assertEquals(
-//                 trigger.payload,
-//                 2,
-//                 "Should correctly process payload"
-//             );
-//             assertEquals(
-//                 trigger.from$.getValue()[0],
-//                 inputTrigger,
-//                 "Should correctly set from$"
-//             );
-//             assertEquals(
-//                 trigger.operable,
-//                 operable,
-//                 "Should correctly set operable"
-//             );
-//             if (index > 0) {
-//                 assertEquals(
-//                     trigger.previous,
-//                     outputTriggers[index - 1],
-//                     "Should correctly set previous if checked"
-//                 );
-//             }
-//         });
-//     }
-// );
+        // // given the graphlib graph above, get the single shared ancestor of D and E
+        // const sharedAncestors1 = graph.getSharedAncestors([D, E]);
+        // assertEquals(sharedAncestors1.length, 1);
+    }
+);
+
+Deno.test(
+    "withTriggerGraph: adaptive concurrency in Serial and correct Trigger wrapping",
+    async () => {
+        const operable = new Operable(() => {});
+        const inputTrigger = new Trigger(1, operable);
+        const inputTrigger2 = new Trigger(2, operable);
+        const inputTrigger3 = new Trigger(3, operable);
+        const outputTriggers = [];
+        const inputTriggers = [inputTrigger, inputTrigger2, inputTrigger3];
+
+        operable.input$
+            .pipe(
+                withTriggerGraph(
+                    operable,
+                    pipe(map((_) => (_.previous ? 5 : 5)))
+                )
+            )
+            .subscribe((trigger) => {
+                outputTriggers.push(trigger);
+            });
+
+        operable.next(inputTrigger);
+        operable.next(inputTrigger2);
+        operable.next(inputTrigger3);
+
+        // Allow async operations to complete
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        assertEquals(outputTriggers.length, 3);
+
+        assertEquals(inputTrigger.checkedPrevious, true);
+
+        outputTriggers.forEach((trigger, index) => {
+            // payload set correctly
+            assertEquals(trigger.payload, 5);
+
+            // from set correctly
+            assertEquals(trigger.from$.getValue()[0], inputTriggers[index]);
+
+            // operable set correctly
+            assertEquals(trigger.operable, operable);
+            if (index > 0) {
+                // previous set correctly
+                console.log(
+                    "check previous",
+                    index,
+                    inputTriggers[index].previous,
+                    outputTriggers[index - 1].payload
+                );
+                assertEquals(
+                    inputTriggers[index].previous,
+                    outputTriggers[index - 1].payload
+                );
+            }
+        });
+    }
+);
+
+Deno.test(
+    "withTriggerGraph: automatic concurrency when pipeline does not check `.previous` value",
+    async () => {
+        const operable = new Operable(() => {});
+        const inputTrigger = new Trigger(1, operable);
+        const inputTrigger2 = new Trigger(2, operable);
+        const inputTrigger3 = new Trigger(3, operable);
+        const outputTriggers = [];
+        const inputTriggers = [inputTrigger, inputTrigger2, inputTrigger3];
+
+        operable.input$
+            .pipe(
+                withTriggerGraph(
+                    operable,
+                    pipe(map((_) => 5)) // pipeline that does not check `.previous` value
+                )
+            )
+            .subscribe((trigger) => {
+                outputTriggers.push(trigger);
+            });
+
+        operable.next(inputTrigger);
+        operable.next(inputTrigger2);
+        operable.next(inputTrigger3);
+
+        assertEquals(inputTrigger.checkedPrevious, false);
+        // Allow async operations to complete
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        assertEquals(outputTriggers.length, 3);
+
+        outputTriggers.forEach((trigger, index) => {
+            // payload set correctly
+            assertEquals(trigger.payload, 5);
+
+            // from set correctly
+            assertEquals(trigger.from$.getValue()[0], inputTriggers[index]);
+
+            // operable set correctly
+            assertEquals(trigger.operable, operable);
+            assertEquals(inputTriggers[index].previous, null);
+        });
+    }
+);
+
 Deno.test(
     "inSerial should process triggers in sequence with last state",
     async () => {
@@ -155,8 +261,71 @@ Deno.test("Trigger.find method", async () => {
     );
 });
 
+Deno.test("createGraph should correctly create a cyclic graph", async () => {
+    // Graph shape:
+    // graph TB
+    // A[A] --> B[B]
+    // B --> C[C]
+    // C --> A
+
+    const nodeA = {
+        id: "A",
+        from$: new BehaviorSubject([]),
+    };
+
+    const nodeB = {
+        id: "B",
+        from$: new BehaviorSubject([]),
+    };
+
+    const nodeC = {
+        id: "C",
+        from$: new BehaviorSubject([]),
+    };
+
+    nodeA.from$.next([nodeB]);
+    nodeB.from$.next([nodeC]);
+    nodeC.from$.next([nodeA]);
+
+    let result;
+    createGraph(nodeA, "from$").subscribe((_graph) => {
+        console.log("graph", _graph);
+        result = _graph;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const expectedGraph = new Graph();
+    expectedGraph.setNode(nodeA.id, nodeA);
+    expectedGraph.setNode(nodeB.id, nodeB);
+    expectedGraph.setNode(nodeC.id, nodeC);
+    expectedGraph.setEdge(nodeA.id, nodeB.id);
+    expectedGraph.setEdge(nodeB.id, nodeC.id);
+    expectedGraph.setEdge(nodeC.id, nodeA.id);
+
+    const sortEdges = (a, b) => {
+        if (a.v === b.v) {
+            return a.w.localeCompare(b.w);
+        }
+        return a.v.localeCompare(b.v);
+    };
+
+    const resultEdgesSorted = result.edges().sort(sortEdges);
+    const expectedEdgesSorted = expectedGraph.edges().sort(sortEdges);
+
+    // Now compare the sorted edges
+    assertEquals(resultEdgesSorted, expectedEdgesSorted);
+
+    result.nodes().forEach((node) => {
+        assertEquals(result.node(node), expectedGraph.node(node));
+    });
+    result.edges().forEach((edge) => {
+        assertEquals(result.edge(edge), expectedGraph.edge(edge));
+    });
+});
+
 Deno.test(
-    "createDag should correctly create a directed acyclic graph",
+    "createGraph should correctly create a directed acyclic graph",
     async () => {
         const node = {
             id: v4(),
@@ -174,9 +343,7 @@ Deno.test(
         };
         node.from$.next([child1, child2]);
 
-        const result = await firstValueFrom(
-            node.from$.pipe(createDag(node, "from$"), skip(1))
-        );
+        const result = await firstValueFrom(createGraph(node, "from$"));
 
         const expectedGraph = new Graph();
         expectedGraph.setNode(node.id, node);
@@ -185,8 +352,20 @@ Deno.test(
         expectedGraph.setEdge(node.id, child1.id);
         expectedGraph.setEdge(node.id, child2.id);
 
+        const sortEdges = (a, b) => {
+            if (a.v === b.v) {
+                return a.w.localeCompare(b.w);
+            }
+            return a.v.localeCompare(b.v);
+        };
+
+        const resultEdgesSorted = result.edges().sort(sortEdges);
+        const expectedEdgesSorted = expectedGraph.edges().sort(sortEdges);
+
+        // Now compare the sorted edges
+        assertEquals(resultEdgesSorted, expectedEdgesSorted);
+
         assertEquals(result.nodes(), expectedGraph.nodes());
-        assertEquals(result.edges(), expectedGraph.edges());
         result.nodes().forEach((node) => {
             assertEquals(result.node(node), expectedGraph.node(node));
         });

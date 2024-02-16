@@ -19,6 +19,8 @@ import {
     scan,
     concat,
     ReplaySubject,
+    combineLatest,
+    zip,
     Subject,
 } from "rxjs";
 
@@ -45,6 +47,7 @@ export class Operable {
     constructor(operableCore, upstreams = []) {
         this.id = uuid();
         this.upstream$ = new BehaviorSubject(upstreams);
+        this.downstream$ = new BehaviorSubject([]);
         this.input$ = new ReplaySubject(1);
         this.destroy$ = new Subject();
         this.core = operableCore;
@@ -129,14 +132,25 @@ export class Operable {
             next = new Operable(next);
         }
 
-        next.upstream$
-            .pipe(
-                take(1),
-                map((value) => Array.from(new Set(value.concat([this]))))
-            )
-            .subscribe(next.upstream$);
+        addToBehaviorSubject(this.upstream$, next);
+        addToBehaviorSubject(next.downstream$, this);
 
         return next.pipe(...rest);
+    }
+
+    unpipe(next) {
+        if (!next) {
+            return this;
+        }
+
+        removeFromBehaviorSubject(this.upstream$, next);
+        removeFromBehaviorSubject(next.downstream$, this);
+
+        return this;
+    }
+
+    destroy() {
+        this.destroy$.next();
     }
 }
 
@@ -194,9 +208,10 @@ export function operableCombine(
     return combinationOperable;
 }
 
-function closestSharedAncestor(operables) {
+export function closestSharedAncestor(operables) {
     const visited = new Map();
     const queue = [...operables];
+    let rootAncestor = null;
 
     for (const operable of operables) {
         visited.set(operable, 1);
@@ -204,7 +219,7 @@ function closestSharedAncestor(operables) {
 
     while (queue.length > 0) {
         const current = queue.shift();
-        const nextOperables = current.upstreams$.getValue();
+        const nextOperables = current.upstream$.getValue();
 
         for (const next of nextOperables) {
             if (!visited.has(next)) {
@@ -213,19 +228,17 @@ function closestSharedAncestor(operables) {
             } else {
                 visited.set(next, visited.get(next) + 1);
             }
-
             if (visited.get(next) === operables.length) {
-                return next;
+                rootAncestor = next;
             }
         }
     }
 
-    return null;
+    return rootAncestor;
 }
 
 export function inSerial(operable, coreOperator, state) {
     return concatMap((inputTrigger) => {
-        console.log("INPUT TRIGGER", inputTrigger);
         inputTrigger.previous = state.previous;
         return of(inputTrigger).pipe(
             coreOperator,
@@ -249,26 +262,46 @@ export function inParallel(operable, coreOperator) {
 export function withTriggerGraph(operable, coreOperator) {
     return (input$) => {
         const state = { previous: null };
-        const source$ = input$.pipe(lockTrigger(operable));
+        const source$ = input$.pipe(lockTrigger(operable), shareReplay(1));
 
         const firstTrigger$ = source$.pipe(
             take(1),
-            inSerial(operable, coreOperator, state)
+            inSerial(operable, coreOperator, state),
+            shareReplay(1)
         );
 
         const remainingTriggers$ = source$.pipe(skip(1));
 
-        const subsequentTriggers$ = firstTrigger$.pipe(
-            switchMap((firstTrigger) =>
-                remainingTriggers$.pipe(
-                    firstTrigger.checkedPrevious
-                        ? inSerial(operable, coreOperator, state)
-                        : inParallel(operable, coreOperator)
-                )
-            )
+        const subsequentTriggers$ = zip(firstTrigger$, source$).pipe(
+            take(1),
+            switchMap(([_, firstInputTrigger]) => {
+                console.log(
+                    "FIRST TRIGGER",
+                    firstInputTrigger.id,
+                    firstInputTrigger.payload,
+                    firstInputTrigger.checkedPrevious
+                );
+                const nextOperator = firstInputTrigger.checkedPrevious
+                    ? inSerial
+                    : inParallel;
+
+                return remainingTriggers$.pipe(
+                    nextOperator(operable, coreOperator, state),
+                    tap((trigger) => console.log("TRIGGER", trigger.id))
+                );
+            })
         );
 
-        return concat(firstTrigger$, subsequentTriggers$);
+        return concat(firstTrigger$, subsequentTriggers$).pipe(
+            tap((trigger) => {
+                console.log(
+                    "withTriggerGraph",
+                    trigger.id,
+                    trigger.payload,
+                    trigger.from$.getValue().map((t) => [t.id, t.payload])
+                );
+            })
+        );
     };
 }
 
@@ -325,7 +358,9 @@ function toTriggers(operable, ...fromTriggers) {
 }
 
 function addToBehaviorSubject(behaviorSubject, ...values) {
-    behaviorSubject.next(behaviorSubject.getValue().concat(values));
+    behaviorSubject.next(
+        Array.from(new Set(behaviorSubject.getValue().concat(values)))
+    );
 }
 
 function removeFromBehaviorSubject(behaviorSubject, ...values) {
@@ -341,7 +376,7 @@ function lockTrigger(operable) {
 }
 
 function unlockTrigger(operable, ...from) {
-    console.log("UNLOCK", operable, from);
+    // console.log("UNLOCK", operable, from);
     return finalize(() =>
         setTimeout(
             () =>
@@ -367,8 +402,8 @@ export class Trigger {
         this.id = uuid(); // unique identifier flag
         if (Array.is) this.payload = payload;
         this.operable = operable;
-        this.from$.pipe(createDag(this, "from$")).subscribe(this.fromDag$);
-        this.to$.pipe(createDag(this, "to$")).subscribe(this.toDag$);
+        createGraph(this, "from$").subscribe(this.fromDag$);
+        createGraph(this, "to$").subscribe(this.toDag$);
         this.payload = payload;
         addToBehaviorSubject(this.from$, ...from);
         from.forEach((trigger) => addToBehaviorSubject(trigger.to$, this));
@@ -424,12 +459,10 @@ export class Trigger {
     exhaust$(operables) {
         return this.toDag$.pipe(
             switchMap((graph) => {
-                console.log("GRAPH", graph);
                 const triggers = alg
                     .postorder(graph, graph.nodes())
                     .map((nodeId) => graph.node(nodeId));
 
-                console.log("TRIGGERS", triggers.length);
                 return forkJoin(
                     triggers.map((trigger) =>
                         trigger.locks$.pipe(
@@ -438,9 +471,6 @@ export class Trigger {
                         )
                     )
                 ).pipe(
-                    tap((locks) => {
-                        console.log("LOCKS", locks.length);
-                    }),
                     map(() =>
                         triggers.filter((trigger) =>
                             operables.includes(trigger.operable)
@@ -462,33 +492,69 @@ export class Trigger {
     }
 }
 
-export function createDag(node, $key) {
-    return pipe(
-        switchMap((children) => {
-            const graph = new Graph();
-            graph.setNode(node.id, node);
+export function createGraph(node, $key, visited = new Set()) {
+    if (Array.isArray(node)) {
+        return createGraphs(node, $key, visited).pipe(
+            map((graphs) => mergeGraphs(new Graph(), ...graphs))
+        );
+    }
 
-            if (!children?.length) {
-                return of(graph);
+    // Base case: if we've already visited this node, return an empty graph to avoid cycles
+    if (visited.has(node.id)) {
+        return of(new Graph());
+    }
+
+    // Mark this node as visited
+    visited.add(node.id);
+
+    return node[$key].pipe(
+        // Use switchMap to handle unsubscribing from previous children observables
+        switchMap((children) => {
+            // If there are no children, return a graph with just the current node
+            if (!children || children.length === 0) {
+                let singleNodeGraph = new Graph();
+                singleNodeGraph.setNode(node.id, node);
+                return of(singleNodeGraph);
             }
 
-            return from(children).pipe(
-                mergeMap((child) => {
-                    graph.setEdge(node.id, child.id);
-                    return child[$key].pipe(createDag(child, $key));
-                }),
-                scan((accGraph, childGraph) => {
-                    alg.postorder(childGraph, childGraph.nodes()).forEach(
-                        (nodeId) => {
-                            accGraph.setNode(nodeId, childGraph.node(nodeId));
-                            childGraph.inEdges(nodeId).forEach(({ v, w }) => {
-                                accGraph.setEdge(v, w);
-                            });
-                        }
-                    );
-                    return accGraph;
-                }, graph)
+            // Otherwise, recursively create graphs for each child
+            return createGraphs(children, $key, visited).pipe(
+                // Combine all child graphs with the current node into a new graph
+                map((childGraphs) => {
+                    let combinedGraph = new Graph();
+                    combinedGraph.setNode(node.id, node);
+
+                    mergeGraphs(combinedGraph, ...childGraphs);
+                    // Connect the current node to its children
+                    children.forEach((child) => {
+                        combinedGraph.setEdge(node.id, child.id);
+                    });
+
+                    return combinedGraph;
+                })
             );
-        })
+        }),
+        // Ensure that the graph is shared and replayed to new subscribers
+        shareReplay(1)
     );
+}
+
+export function createGraphs(nodes, $key, visited) {
+    return combineLatest(
+        nodes.map((node) => createGraph(node, $key, new Set(visited)))
+    );
+}
+
+export function mergeGraphs(target, ...graphs) {
+    graphs.forEach((graph) => {
+        graph.nodes().forEach((nodeId) => {
+            target.setNode(nodeId, target.node(nodeId) || graph.node(nodeId));
+        });
+
+        graph.edges().forEach((edge) => {
+            target.setEdge(edge.v, edge.w);
+        });
+    });
+
+    return target;
 }
