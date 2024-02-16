@@ -56,10 +56,10 @@ Deno.test("getting started", async () => {
             () => {
                 done = true;
                 console.log("done");
+                // returning falsey should not run the next function
             },
             () => {
                 over = true;
-                assertEquals(true, false);
                 console.log("should not run");
             }
         )
@@ -68,6 +68,52 @@ Deno.test("getting started", async () => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     assertEquals(done, true);
     assertEquals(over, false);
+});
+
+Deno.test("re-using operable", async () => {
+    const evens = new Operable(of(2, 4, 6, 8));
+    const odds = new Operable(of(1, 3, 5, 7));
+    const doubled = new Operable(
+        map((trigger) => ({
+            doubled: trigger.payload * 2;
+        }))
+    );
+
+    const resultsEven = [];
+    const resultsOdd = [];
+
+    const doubledEvens = evens.pipe(
+        doubled,
+        filter((n) => Math.isEven(n / 2))
+    ).$.subscribe((trigger) => {
+        resultsEven.push(trigger);
+    });
+
+    const doubledOdds = odds.pipe(
+        doubled,
+        filter((n) => Math.isOdd(n / 2))
+    ).$.subscribe((trigger) => {
+        resultsOdd.push(trigger);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assertEquals(resultsEven.length, 4);
+    assertEquals(resultsOdd.length, 4);
+
+    doubledEvens.unsubscribe();
+    doubledOdds.unsubscribe();
+
+    resultsEven.forEach((trigger) => {
+        const num = trigger.find(z.number());
+
+        assertEquals(trigger.payload.doubled, num * 2);
+    });
+
+    resultsOdd.forEach((trigger) => {
+        const num = trigger.find(z.number());
+
+        assertEquals(trigger.payload.doubled, num * 2);
+    });
 });
 
 Deno.test(

@@ -426,7 +426,7 @@ export class Trigger {
         if (isPureFunction(query)) {
             query = (node) => query(node.payload);
         } else if (isZodSchema(query)) {
-            console.log("ZOD SCHEMA", query);
+            // console.log("ZOD SCHEMA", query);
             const schema = query;
             query = (node) => schema.safeParse(node.payload).success;
         }
@@ -438,11 +438,11 @@ export class Trigger {
         const topoSort = alg.topsort(graph);
         let result = [];
 
-        console.log("QUERY", query);
-        console.log(
-            "TOPO SORT",
-            topoSort.map((nodeId) => graph.node(nodeId).payload)
-        );
+        // console.log("QUERY", query);
+        // console.log(
+        //     "TOPO SORT",
+        //     topoSort.map((nodeId) => graph.node(nodeId).payload)
+        // );
 
         if (isOperable(query)) {
             result = topoSort
