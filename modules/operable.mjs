@@ -7,8 +7,10 @@ import {
     forkJoin,
     shareReplay,
     take,
+    EMPTY,
     map,
     mergeMap,
+    delay,
     distinct,
     concatMap,
     tap,
@@ -17,12 +19,15 @@ import {
     finalize,
     filter,
     scan,
+    takeUntil,
     concat,
     ReplaySubject,
     combineLatest,
     zip,
     Subject,
     isObservable,
+    asyncScheduler,
+    observeOn,
 } from "rxjs";
 
 import { Graph, alg } from "graphlib";
@@ -49,7 +54,7 @@ export class Operable {
         this.id = uuid();
         this.upstream$ = new BehaviorSubject(upstreams);
         this.downstream$ = new BehaviorSubject([]);
-        this.input$ = new ReplaySubject(1);
+        this.input$ = new ReplaySubject(10);
         this.destroy$ = new Subject();
         this.core = operableCore;
 
@@ -57,7 +62,8 @@ export class Operable {
             .pipe(
                 switchMap((upstreams) =>
                     merge(...upstreams.map((upstream) => upstream.$))
-                )
+                ),
+                distinct((trigger) => trigger.id)
             )
             .subscribe(this.input$);
 
@@ -91,7 +97,6 @@ export class Operable {
                 )
             );
         } else if (isPureFunction(operableCore)) {
-            console.log("PURE FUNCTION");
             trigger$ = this.input$.pipe(
                 withTriggerGraph(
                     this,
@@ -99,14 +104,15 @@ export class Operable {
                 )
             );
         } else if (isObservable(operableCore)) {
-            trigger$ = operableCore.pipe(
+            const core = operableCore;
+            trigger$ = core.pipe(
                 take(1),
                 switchMap((emitted) => {
                     if (
                         emitted instanceof Trigger ||
                         (Array.isArray(emitted) && emitted.every(isTrigger))
                     ) {
-                        return from(operableCore).pipe(
+                        return from(core).pipe(
                             mergeMap((emitted) => {
                                 const triggers = Array.isArray(emitted)
                                     ? emitted
@@ -119,10 +125,10 @@ export class Operable {
                     }
 
                     if (isPojo(emitted) || !!emitted) {
-                        return from(operableCore).pipe(toTriggers(this));
+                        return from(core).pipe(toTriggers(this));
                     }
 
-                    return operableCore.pipe(
+                    return core.pipe(
                         switchMap((newCore) => this.makeOutput$(newCore))
                     );
                 })
@@ -131,7 +137,7 @@ export class Operable {
             trigger$ = from(operableCore).pipe(toTriggers(this));
         }
 
-        return trigger$.pipe(shareReplay(1));
+        return trigger$.pipe(shareReplay(10));
     }
 
     pipe(next, ...rest) {
@@ -274,29 +280,47 @@ export function inParallel(operable, coreOperator) {
 export function withTriggerGraph(operable, coreOperator) {
     return (input$) => {
         const state = { previous: null };
-        const source$ = input$.pipe(lockTrigger(operable), shareReplay(10));
+        const source$ = input$.pipe(lockTrigger(operable));
 
         const firstTrigger$ = source$.pipe(
+            take(1),
             inSerial(operable, coreOperator, state),
             shareReplay(1)
         );
 
+        const firstTriggerDone$ = source$.pipe(
+            take(1),
+            switchMap((trigger) =>
+                trigger.locks$.pipe(
+                    filter((locks) => !locks.some((lock) => lock === operable)),
+                    map(() => trigger)
+                )
+            ),
+            take(1)
+        );
+
         const remainingTriggers$ = source$.pipe(skip(1));
 
-        const subsequentTriggers$ = zip(firstTrigger$, source$).pipe(
+        const subsequentTriggers$ = zip(
+            merge(firstTrigger$, firstTriggerDone$),
+            source$
+        ).pipe(
             take(1),
             switchMap(([_, firstInputTrigger]) => {
-                const nextOperator = firstInputTrigger.checkedPrevious
+                const nextOperator = firstInputTrigger?.checkedPrevious
                     ? inSerial
                     : inParallel;
 
                 return remainingTriggers$.pipe(
-                    nextOperator(operable, coreOperator, state)
+                    nextOperator(operable, coreOperator, state),
+                    tap((output) => {
+                        console.log("OUTPUT", output.payload);
+                    })
                 );
             })
         );
 
-        return concat(firstTrigger$, subsequentTriggers$).pipe();
+        return merge(firstTrigger$, subsequentTriggers$);
     };
 }
 
@@ -328,7 +352,7 @@ function isTrigger(trigger) {
 }
 
 function isZodSchema(operableCore) {
-    return z.instanceof(operableCore);
+    return !!operableCore.safeParse;
 }
 
 function isOperable(operableCore) {
@@ -338,16 +362,23 @@ function isOperable(operableCore) {
 function toTriggers(operable, ...fromTriggers) {
     return pipe(
         mergeMap((output) => {
-            // console.log("TO TRIGGERS", output, Array.isArray(output));
-
-            let output$ =
+            if (output === null || output === undefined || output === false) {
+                output = EMPTY;
+            } else if (output instanceof Trigger) {
+                console.log("PASS THROUGH", output.payload);
+                return of(output).pipe(
+                    unlockTrigger(operable, ...fromTriggers)
+                );
+            } else if (
                 (isPojo(output) || !!output || !output) &&
                 !Array.isArray(output)
-                    ? of(output)
-                    : from(output);
+            ) {
+                output = of(output);
+            } else {
+                output = from(output);
+            }
 
-            return output$.pipe(
-                filter(Boolean),
+            return output.pipe(
                 map(
                     (payload) => new Trigger(payload, operable, ...fromTriggers)
                 ),
@@ -424,9 +455,10 @@ export class Trigger {
 
     find(query, graph = this.fromDag$.getValue()) {
         if (isPureFunction(query)) {
-            query = (node) => query(node.payload);
+            const _query = query;
+            query = (node) => _query(node.payload);
         } else if (isZodSchema(query)) {
-            // console.log("ZOD SCHEMA", query);
+            console.log("ZOD SCHEMA", query);
             const schema = query;
             query = (node) => schema.safeParse(node.payload).success;
         }
