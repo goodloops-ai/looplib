@@ -68,6 +68,8 @@ export class Operable {
             .subscribe(this.input$);
 
         this.$ = this.makeOutput$(operableCore, upstreams);
+
+        this.$.pipe(takeUntil(this.destroy$)).subscribe();
     }
 
     next(triggerOrPayload) {
