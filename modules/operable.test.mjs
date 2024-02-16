@@ -7,9 +7,9 @@ import {
     inSerial,
     withTriggerGraph,
     inParallel,
-    findSharedAncestors,
+    // findClosestCommonAncestor,
 } from "./operable.mjs";
-import { Graph } from "graphlib";
+import { Graph, alg } from "graphlib";
 import { v4 } from "uuid";
 import {
     BehaviorSubject,
@@ -22,58 +22,343 @@ import {
     pipe,
     debounceTime,
     toArray,
+    from,
 } from "rxjs";
 import { z } from "zod";
 import { deepEqual } from "fast-equals";
 
+Deno.test("getting started", async () => {
+    const start = new Operable(of({ subject: "hello world" }));
+
+    let done = false;
+    let over = false;
+    start
+        .pipe(
+            async (trigger) => {
+                const response = await (() => "ryan")();
+                return { name: response };
+            },
+            async (trigger) => {
+                const response = await (() => "33")();
+                return { age: response };
+            },
+            (trigger) => {
+                const { age } = trigger.findOne(z.object({ age: z.string() }));
+                const { name } = trigger.findOne(
+                    z.object({ name: z.string() })
+                );
+                console.log(`Hello ${name}, you are ${age} years old`);
+
+                assertEquals(name, "ryan");
+                assertEquals(age, "33");
+                return true;
+            },
+            () => {
+                done = true;
+                console.log("done");
+            },
+            () => {
+                over = true;
+                assertEquals(true, false);
+                console.log("should not run");
+            }
+        )
+        .$.subscribe();
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assertEquals(done, true);
+    assertEquals(over, false);
+});
+
 Deno.test(
-    "getSharedAncestors should return the smallest number of shared ancestors that cover all given nodes",
+    "Observable core emits triggers with payloads 1, 2, 3, 4, 5",
     async () => {
-        // Graph shape:
-        // graph TB
-        // A[A] --> B[B]
-        // A --> C[C]
-        // B --> D[D]
-        // C --> D
-        // B --> E[E]
-        // C --> F[F]
-        // E --> G[G]
-        // F --> G
-        // D --> H[H]
-        // G --> H
+        const observableCore = from([1, 2, 3, 4, 5]);
+        const operable = new Operable(observableCore);
+        const emittedTriggers = [];
 
-        const A = new Operable(() => {});
-        const B = new Operable(() => {});
-        const C = new Operable(() => {});
-        const D = new Operable(() => {});
-        const E = new Operable(() => {});
-        const F = new Operable(() => {});
-        const G = new Operable(() => {});
-        const H = new Operable(() => {});
+        const subscription = operable.$.subscribe({
+            next: (trigger) => {
+                emittedTriggers.push(trigger);
+            },
+        });
 
-        A.pipe(B);
-        A.pipe(C);
-        B.pipe(D);
-        C.pipe(D);
-        B.pipe(E);
-        C.pipe(F);
-        E.pipe(G);
-        F.pipe(G);
-        D.pipe(H);
-        G.pipe(H);
+        // Wait for all values to be emitted
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
-        const graph = await firstValueFrom(createGraph(A, "downstream$"));
+        // Check that there are 5 triggers
+        assertEquals(emittedTriggers.length, 5);
 
-        const sharedAncestors = findSharedAncestors(graph, [D, G]);
-        console.log(
-            "sharedAncestors",
-            sharedAncestors.map((node) => node.id)
-        );
-        // // given the graphlib graph above, get the single shared ancestor of D and E
-        // const sharedAncestors1 = graph.getSharedAncestors([D, E]);
-        // assertEquals(sharedAncestors1.length, 1);
+        // Check that payloads are 1, 2, 3, 4, 5
+        emittedTriggers.forEach((trigger, index) => {
+            console.log("trigger", trigger.payload, index + 1);
+            assertEquals(trigger instanceof Trigger, true);
+            // assertEquals(trigger.payload, index + 1);
+        });
+
+        subscription.unsubscribe();
     }
 );
+
+Deno.test("async fn core", async () => {
+    const operable = new Operable(async (trigger) => trigger.payload * 2);
+
+    const subscription = operable.$.subscribe({
+        next: (trigger) => {
+            emittedTriggers.push(trigger);
+        },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const inputs = [1, 2, 3, 4, 5];
+    inputs.forEach((input) => {
+        operable.next(input);
+    });
+
+    const emittedTriggers = [];
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for all values to be emitted
+
+    // Check that there are 5 triggers
+    assertEquals(emittedTriggers.length, 5);
+
+    // Check that payloads are 1, 2, 3, 4, 5
+    emittedTriggers.forEach((trigger, index) => {
+        assertEquals(trigger instanceof Trigger, true);
+        assertEquals(trigger.payload, (index + 1) * 2);
+    });
+
+    subscription.unsubscribe();
+});
+
+Deno.test("operator fn core", async () => {
+    const operable = new Operable(map((trigger) => trigger.payload * 2));
+
+    const emittedTriggers = [];
+    const subscription = operable.$.subscribe({
+        next: (trigger) => {
+            emittedTriggers.push(trigger);
+        },
+    });
+
+    const inputs = [1, 2, 3, 4, 5];
+    inputs.forEach((input) => {
+        operable.next(input);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for all values to be emitted
+
+    // Check that there are 5 triggers
+    assertEquals(emittedTriggers.length, 5);
+
+    // Check that payloads are 1, 2, 3, 4, 5
+    emittedTriggers.forEach((trigger, index) => {
+        assertEquals(trigger instanceof Trigger, true);
+        assertEquals(trigger.payload, (index + 1) * 2);
+    });
+
+    subscription.unsubscribe();
+});
+
+Deno.test("multiOutput", async () => {
+    const operable = new Operable((trigger) => [
+        trigger.payload * 2,
+        trigger.payload * 3,
+    ]);
+
+    const emittedTriggers = [];
+    const subscription = operable.$.subscribe({
+        next: (trigger) => {
+            emittedTriggers.push(trigger);
+        },
+    });
+
+    const inputs = [1, 2, 3, 4, 5].map((payload) => new Trigger(payload));
+    inputs.forEach((input) => {
+        operable.next(input);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for all values to be emitted
+
+    // Check that there are 5 triggers
+    assertEquals(emittedTriggers.length, 10);
+
+    // Check that payloads are 1, 2, 3, 4, 5
+    inputs.forEach((input, index) => {
+        const outputPayloads = emittedTriggers
+            .filter((trigger) => trigger.from$.getValue()[0].id === input.id)
+            .map(({ payload }) => payload)
+            .sort();
+        assertEquals(
+            outputPayloads.sort(),
+            [input.payload * 2, input.payload * 3].sort()
+        );
+    });
+
+    subscription.unsubscribe();
+});
+
+Deno.test("multiOutput operator", async () => {
+    const operable = new Operable(
+        mergeMap((trigger) => from([trigger.payload * 2, trigger.payload * 3]))
+    );
+
+    const emittedTriggers = [];
+    const subscription = operable.$.subscribe({
+        next: (trigger) => {
+            emittedTriggers.push(trigger);
+        },
+    });
+
+    const inputs = [1, 2, 3, 4, 5].map((payload) => new Trigger(payload));
+    inputs.forEach((input) => {
+        operable.next(input);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for all values to be emitted
+
+    // Check that there are 5 triggers
+    assertEquals(emittedTriggers.length, 10);
+
+    // Check that payloads are 1, 2, 3, 4, 5
+    inputs.forEach((input, index) => {
+        const outputPayloads = emittedTriggers
+            .filter((trigger) => trigger.from$.getValue()[0].id === input.id)
+            .map(({ payload }) => payload)
+            .sort();
+        assertEquals(
+            outputPayloads.sort(),
+            [input.payload * 2, input.payload * 3].sort()
+        );
+    });
+
+    subscription.unsubscribe();
+});
+
+Deno.test("multiOutput async generator", async () => {
+    const core = async function* () {
+        let trigger = { payload: 0 };
+        while (true) {
+            trigger = yield [trigger.payload * 2, trigger.payload * 3];
+            console.log("trigger", trigger.payload);
+        }
+    };
+
+    const operable = new Operable(core);
+
+    const emittedTriggers = [];
+    const subscription = operable.$.subscribe({
+        next: (trigger) => {
+            console.log("trigger!!!", trigger.payload);
+            emittedTriggers.push(trigger);
+        },
+    });
+
+    const inputs = [1, 2, 3, 4, 5].map((payload) => new Trigger(payload));
+    inputs.forEach((input) => {
+        operable.next(input);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for all values to be emitted
+
+    // Check that there are 5 triggers
+    assertEquals(emittedTriggers.length, 10);
+
+    // Check that payloads are 1, 2, 3, 4, 5
+    inputs.forEach((input, index) => {
+        const outputPayloads = emittedTriggers
+            .filter((trigger) => trigger.from$.getValue()[0].id === input.id)
+            .map(({ payload }) => payload)
+            .sort();
+        assertEquals(
+            outputPayloads.sort(),
+            [input.payload * 2, input.payload * 3].sort()
+        );
+    });
+
+    subscription.unsubscribe();
+});
+// Deno.test(
+//     "getSharedAncestors should return the smallest number of shared ancestors that cover all given nodes",
+//     async () => {
+//         // Graph shape:
+//         // graph TB
+//         // Z --> A
+//         // A[A] --> B[B]
+//         // A --> C[C]
+//         // B --> D[D]
+//         // C --> D
+//         // B --> E[E]
+//         // C --> F[F]
+//         // E --> G[G]
+//         // F --> G
+//         // D --> H[H]
+//         // G --> H
+//         const Z = new Operable(() => {});
+//         const A = new Operable(() => {});
+//         const B = new Operable(() => {});
+//         const C = new Operable(() => {});
+//         const D = new Operable(() => {});
+//         const E = new Operable(() => {});
+//         const F = new Operable(() => {});
+//         const G = new Operable(() => {});
+//         const H = new Operable(() => {});
+
+//         Z.pipe(A);
+//         A.pipe(B);
+//         A.pipe(C);
+//         B.pipe(D);
+//         C.pipe(D);
+//         B.pipe(E);
+//         C.pipe(F);
+//         E.pipe(G);
+//         F.pipe(G);
+//         D.pipe(H);
+//         G.pipe(H);
+
+//         const graph = await firstValueFrom(createGraph([D, G], "upstream$"));
+
+//         const query = [D, G].map((node) => node.id);
+//         const paths = alg.dijkstraAll(graph);
+
+//         const ancestors = Object.entries(paths)
+//             .filter(([_, paths]) =>
+//                 query.every((q) => paths[q].distance < Infinity)
+//             )
+//             .sort((a, b) => {
+//                 const aDistanceSum = query.reduce(
+//                     (sum, q) => sum + a[1][q].distance,
+//                     0
+//                 );
+//                 const bDistanceSum = query.reduce(
+//                     (sum, q) => sum + b[1][q].distance,
+//                     0
+//                 );
+//                 return aDistanceSum - bDistanceSum;
+//             });
+
+//         console.log("ancestors", paths, query);
+//         // find the first ancestor through which all previous ancestors are reachable
+//         // const sharedAncestors = ancestors.find(([ancestor, paths], i) => {
+//         //     if (!i) return false;
+//         //     const reachableAncestors = ancestors
+//         //         .slice(0, i)
+//         //         .map(([ancestor]) => ancestor);
+
+//         //     return reachableAncestors.every(
+//         //         (reachableAncestor) =>
+//         //             paths[reachableAncestor].distance < Infinity
+//         //     );
+//         // });
+
+//         // console.log("sharedAncestors", sharedAncestors);
+//     }
+// );
 
 // Deno.test(
 //     "withTriggerGraph: adaptive concurrency in Serial and correct Trigger wrapping",

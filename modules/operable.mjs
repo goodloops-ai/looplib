@@ -22,6 +22,7 @@ import {
     combineLatest,
     zip,
     Subject,
+    isObservable,
 } from "rxjs";
 
 import { Graph, alg } from "graphlib";
@@ -74,24 +75,32 @@ export class Operable {
     makeOutput$(operableCore) {
         let trigger$ = null;
         if (isOperator(operableCore)) {
+            // console.log("OPERATOR");
             trigger$ = this.input$.pipe(withTriggerGraph(this, operableCore));
+        } else if (isAsyncGenerator(operableCore)) {
+            // console.log("ASYNC GENERATOR");
+            let generator = operableCore();
+            generator.next();
+            trigger$ = this.input$.pipe(
+                withTriggerGraph(
+                    this,
+                    mergeMap(async (trigger) => {
+                        // console.log("ASYNC GENERATOR");
+                        return (await generator.next(trigger)).value;
+                    })
+                )
+            );
         } else if (isPureFunction(operableCore)) {
+            console.log("PURE FUNCTION");
             trigger$ = this.input$.pipe(
                 withTriggerGraph(
                     this,
                     mergeMap(async (trigger) => await operableCore(trigger))
                 )
             );
-        } else if (isAsyncGenerator(operableCore)) {
-            let generator = operableCore();
-            trigger$ = this.input$.pipe(
-                withTriggerGraph(
-                    this,
-                    mergeMap(async (trigger) => await generator.next(trigger))
-                )
-            );
         } else if (isObservable(operableCore)) {
             trigger$ = operableCore.pipe(
+                take(1),
                 switchMap((emitted) => {
                     if (
                         emitted instanceof Trigger ||
@@ -113,7 +122,9 @@ export class Operable {
                         return from(operableCore).pipe(toTriggers(this));
                     }
 
-                    return this.makeOutput$(emitted);
+                    return operableCore.pipe(
+                        switchMap((newCore) => this.makeOutput$(newCore))
+                    );
                 })
             );
         } else {
@@ -128,12 +139,13 @@ export class Operable {
             return this;
         }
 
-        if (!next instanceof Operable) {
+        if (!(next instanceof Operable)) {
             next = new Operable(next);
         }
 
-        addToBehaviorSubject(this.upstream$, next);
-        addToBehaviorSubject(next.downstream$, this);
+        // console.log("PIPE", next);
+        addToBehaviorSubject(this.downstream$, next);
+        addToBehaviorSubject(next.upstream$, this);
 
         return next.pipe(...rest);
     }
@@ -262,10 +274,9 @@ export function inParallel(operable, coreOperator) {
 export function withTriggerGraph(operable, coreOperator) {
     return (input$) => {
         const state = { previous: null };
-        const source$ = input$.pipe(lockTrigger(operable), shareReplay(1));
+        const source$ = input$.pipe(lockTrigger(operable), shareReplay(10));
 
         const firstTrigger$ = source$.pipe(
-            take(1),
             inSerial(operable, coreOperator, state),
             shareReplay(1)
         );
@@ -275,37 +286,22 @@ export function withTriggerGraph(operable, coreOperator) {
         const subsequentTriggers$ = zip(firstTrigger$, source$).pipe(
             take(1),
             switchMap(([_, firstInputTrigger]) => {
-                console.log(
-                    "FIRST TRIGGER",
-                    firstInputTrigger.id,
-                    firstInputTrigger.payload,
-                    firstInputTrigger.checkedPrevious
-                );
                 const nextOperator = firstInputTrigger.checkedPrevious
                     ? inSerial
                     : inParallel;
 
                 return remainingTriggers$.pipe(
-                    nextOperator(operable, coreOperator, state),
-                    tap((trigger) => console.log("TRIGGER", trigger.id))
+                    nextOperator(operable, coreOperator, state)
                 );
             })
         );
 
-        return concat(firstTrigger$, subsequentTriggers$).pipe(
-            tap((trigger) => {
-                console.log(
-                    "withTriggerGraph",
-                    trigger.id,
-                    trigger.payload,
-                    trigger.from$.getValue().map((t) => [t.id, t.payload])
-                );
-            })
-        );
+        return concat(firstTrigger$, subsequentTriggers$).pipe();
     };
 }
 
 function isOperator(operableCore) {
+    // console.log("IS OPERATOR", operableCore.toString());
     return (
         operableCore.toString() ===
         `e=>{if(xr(e))return e.lift(function(t){try{return r(t,this)}catch(o){this.error(o)}});throw new TypeError("Unable to lift unknown Observable type")}`
@@ -342,12 +338,16 @@ function isOperable(operableCore) {
 function toTriggers(operable, ...fromTriggers) {
     return pipe(
         mergeMap((output) => {
+            // console.log("TO TRIGGERS", output, Array.isArray(output));
+
             let output$ =
-                isPojo(output) || !!output || !output
+                (isPojo(output) || !!output || !output) &&
+                !Array.isArray(output)
                     ? of(output)
                     : from(output);
 
             return output$.pipe(
+                filter(Boolean),
                 map(
                     (payload) => new Trigger(payload, operable, ...fromTriggers)
                 ),
@@ -418,9 +418,31 @@ export class Trigger {
         this._previous = value;
     }
 
+    findOne(query) {
+        return this.find(query)[0];
+    }
+
     find(query, graph = this.fromDag$.getValue()) {
+        if (isPureFunction(query)) {
+            query = (node) => query(node.payload);
+        } else if (isZodSchema(query)) {
+            console.log("ZOD SCHEMA", query);
+            const schema = query;
+            query = (node) => schema.safeParse(node.payload).success;
+        }
+
+        return this.findTriggers(query, graph).map((node) => node.payload);
+    }
+
+    findTriggers(query, graph) {
         const topoSort = alg.topsort(graph);
         let result = [];
+
+        console.log("QUERY", query);
+        console.log(
+            "TOPO SORT",
+            topoSort.map((nodeId) => graph.node(nodeId).payload)
+        );
 
         if (isOperable(query)) {
             result = topoSort
@@ -432,11 +454,10 @@ export class Trigger {
                 .filter((node) => query(node));
         } else if (isZodSchema(query)) {
             result = topoSort
-                .map((nodeId) => query.safeParse(graph.node(nodeId)))
-                .filter((parseResult) => parseResult.success)
-                .map((parseResult) => parseResult.data);
+                .map((nodeId) => graph.node(nodeId))
+                .filter((node) => query.safeParse(node).success);
         } else if (query) {
-            result = topoSort.map((nodeId) => graph.node(nodeId));
+            result = topoSort;
         } else {
             throw new Error(
                 "Invalid query, must supply an operable, function, or Zod schema"
@@ -451,11 +472,6 @@ export class Trigger {
             .postorder(graph, graph.nodes())
             .map((nodeId) => graph.node(nodeId));
     }
-
-    find$(query) {
-        return this.fromDag$.pipe(map((dag) => this.find(query, dag)));
-    }
-
     exhaust$(operables) {
         return this.toDag$.pipe(
             switchMap((graph) => {
@@ -477,9 +493,6 @@ export class Trigger {
                         )
                     ),
                     filter((triggers) => triggers.length > 0),
-                    tap((locks) => {
-                        console.log("Tr", locks.length);
-                    }),
                     distinct((triggers) =>
                         triggers
                             .map((trigger) => trigger.id)
@@ -559,40 +572,72 @@ export function mergeGraphs(target, ...graphs) {
     return target;
 }
 
-export function findAllAncestors(graph, startNode) {
+function findAllAncestors(graph, startNode) {
     let ancestors = new Set();
+    let visited = new Set();
     let stack = [startNode];
 
     while (stack.length > 0) {
         let currentNode = stack.pop();
-        let predecessors = graph.predecessors(currentNode);
-
-        if (predecessors) {
-            predecessors.forEach((pred) => {
-                if (!ancestors.has(pred)) {
+        if (!visited.has(currentNode)) {
+            visited.add(currentNode);
+            let predecessors = graph.predecessors(currentNode);
+            if (predecessors) {
+                predecessors.forEach((pred) => {
                     ancestors.add(pred);
                     stack.push(pred);
-                }
-            });
+                });
+            }
         }
     }
 
     return ancestors;
 }
 
-export function findSharedAncestors(graph, nodes) {
-    let sharedAncestors = null;
+export function findClosestCommonAncestor(graph, nodes) {
+    let allAncestors = nodes.map((node) => findAllAncestors(graph, node));
+    let commonAncestors = allAncestors.reduce((acc, ancestors) => {
+        return new Set([...acc].filter((x) => ancestors.has(x)));
+    });
 
-    nodes.forEach((node) => {
-        let ancestors = findAllAncestors(graph, node);
-        if (sharedAncestors === null) {
-            sharedAncestors = ancestors;
-        } else {
-            sharedAncestors = new Set(
-                [...sharedAncestors].filter((x) => ancestors.has(x))
+    // console.log("COMMON ANCESTORS", commonAncestors);
+
+    let closestAncestor = null;
+    let closestDistance = Infinity;
+    commonAncestors.forEach((ancestor) => {
+        let isAncestorOfAll = allAncestors.every((ancestors) =>
+            ancestors.has(ancestor)
+        );
+        if (isAncestorOfAll) {
+            let distance = alg.dijkstra(
+                graph,
+                ancestor,
+                null,
+                graph.nodeEdges.bind(graph)
             );
+            let minDistance = Math.min(
+                ...nodes.map((node) => distance[node].distance)
+            );
+            if (minDistance < closestDistance) {
+                closestDistance = minDistance;
+                closestAncestor = ancestor;
+            }
         }
     });
 
-    return sharedAncestors ? Array.from(sharedAncestors) : [];
+    // Verify that the closest ancestor is not bypassed by any other common ancestor
+    if (closestAncestor) {
+        let bypassed = Array.from(commonAncestors).some((ancestor) => {
+            return (
+                ancestor !== closestAncestor &&
+                allAncestors.some((ancestors) => ancestors.has(ancestor))
+            );
+        });
+
+        if (bypassed) {
+            return null;
+        }
+    }
+
+    return closestAncestor;
 }
