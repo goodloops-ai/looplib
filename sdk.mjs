@@ -14,6 +14,7 @@ import {
     from,
     distinct,
     take,
+    debounceTime,
 } from "rxjs";
 import { v4 as uuidv4 } from "uuid";
 import { deepEqual } from "fast-equals";
@@ -184,7 +185,7 @@ export class Workflow {
                 outputs.push(n.id);
             }
         }
-        await db.triggers.upsert({
+        const trigger = await db.triggers.upsert({
             id: uuidv4(),
             node: input.id,
             flow: this.id,
@@ -202,6 +203,30 @@ export class Workflow {
                   ]
                 : [],
         });
+
+        const sessionDate = new Date().getTime();
+
+        const all = await db.evaluations
+            .find({
+                selector: {
+                    root: trigger.root,
+                    complete: true,
+                },
+            })
+            .$.pipe(debounceTime(100))
+            .subscribe(async (evaluations) => {
+                const thread = evaluations.map((evaluation) =>
+                    evaluation.toJSON()
+                );
+                const json = JSON.stringify(thread, null, 2);
+                const encoder = new TextEncoder();
+                Deno.writeFileSync(
+                    `./${this.id}-in-progress-${filenamify(
+                        sessionDate.toString()
+                    )}.json`,
+                    encoder.encode(json)
+                );
+            });
 
         // console.log(nod
         const $ = db.evaluations
