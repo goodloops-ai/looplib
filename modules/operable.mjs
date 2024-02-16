@@ -558,3 +558,41 @@ export function mergeGraphs(target, ...graphs) {
 
     return target;
 }
+
+export function findAllAncestors(graph, startNode) {
+    let ancestors = new Set();
+    let stack = [startNode];
+
+    while (stack.length > 0) {
+        let currentNode = stack.pop();
+        let predecessors = graph.predecessors(currentNode);
+
+        if (predecessors) {
+            predecessors.forEach((pred) => {
+                if (!ancestors.has(pred)) {
+                    ancestors.add(pred);
+                    stack.push(pred);
+                }
+            });
+        }
+    }
+
+    return ancestors;
+}
+
+export function findSharedAncestors(graph, nodes) {
+    let sharedAncestors = null;
+
+    nodes.forEach((node) => {
+        let ancestors = findAllAncestors(graph, node);
+        if (sharedAncestors === null) {
+            sharedAncestors = ancestors;
+        } else {
+            sharedAncestors = new Set(
+                [...sharedAncestors].filter((x) => ancestors.has(x))
+            );
+        }
+    });
+
+    return sharedAncestors ? Array.from(sharedAncestors) : [];
+}
