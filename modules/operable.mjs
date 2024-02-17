@@ -23,11 +23,13 @@ import {
     concat,
     ReplaySubject,
     combineLatest,
+    debounceTime,
     zip,
     Subject,
     isObservable,
     asyncScheduler,
     observeOn,
+    distinctUntilChanged,
 } from "rxjs";
 
 import { Graph, alg } from "graphlib";
@@ -69,7 +71,7 @@ export class Operable {
 
         this.$ = this.makeOutput$(operableCore, upstreams);
 
-        this.$.pipe(takeUntil(this.destroy$)).subscribe();
+        // this.$.pipe(takeUntil(this.destroy$)).subscribe();
     }
 
     next(triggerOrPayload) {
@@ -119,7 +121,12 @@ export class Operable {
                                 const triggers = Array.isArray(emitted)
                                     ? emitted
                                     : [emitted];
-                                return of(null).pipe(
+
+                                console.log(
+                                    "EMITTED TRIGGERS",
+                                    triggers.map((t) => t.payload + " " + t.id)
+                                );
+                                return of(Trigger).pipe(
                                     toTriggers(this, ...triggers)
                                 );
                             })
@@ -136,6 +143,7 @@ export class Operable {
                 })
             );
         } else {
+            console.log("UNKNOWN OPERABLE", operableCore);
             trigger$ = from(operableCore).pipe(toTriggers(this));
         }
 
@@ -189,41 +197,90 @@ export function operableMerge(operables) {
 }
 
 export function operableCombine(
-    operablesOrUpstreams,
-    joinAncestor = closestSharedAncestor(operables),
+    operables$ = new BehaviorSubject([]),
+    joinAncestor,
     joinBeforeAncestor = false
 ) {
-    if (Array.isArray(operablesOrUpstreams)) {
-        return operableCombine(
-            of(operablesOrUpstreams),
-            joinAncestor,
-            joinBeforeAncestor
-        );
+    if (Array.isArray(operables$)) {
+        const upstreams$ = new BehaviorSubject(operables$);
+        return operableCombine(upstreams$, joinAncestor, joinBeforeAncestor);
     }
+
+    const operablesWithAncestor$ = operables$.pipe(
+        switchMap((operables) => {
+            console.log(
+                "OPERABLES",
+                operables.map((o) => o.id)
+            );
+            if (joinAncestor) {
+                console.log("JOIN ANCESTOR", joinAncestor);
+                return of({ operables, ancestor: joinAncestor });
+            }
+
+            return getIdealAncestor(operables, "upstream$").pipe(
+                map((ancestor) => ({ operables, ancestor }))
+            );
+        })
+    );
+
+    const cancel$ = new Subject();
+
     const combinationOperable = new Operable(
-        operablesOrUpstreams.pipe(
-            switchMap((operables) => {
-                return operableMerge(operables).$.pipe(
-                    map((trigger) => trigger.find(joinAncestor)),
+        operablesWithAncestor$.pipe(
+            switchMap(({ operables, ancestor }) => {
+                console.log(
+                    "UPSTREAMS",
+                    operables.map((o) => o.id),
+                    ancestor.id
+                );
+                return merge(...operables.map(({ $ }) => $)).pipe(
+                    map((trigger) => trigger.findTriggers(ancestor)[0]),
                     mergeMap((joiningTrigger) =>
                         joinBeforeAncestor
-                            ? joiningTrigger.from$
+                            ? joiningTrigger.from$.pipe(
+                                  mergeMap((_from) => from(_from))
+                              )
                             : of(joiningTrigger)
                     ),
-                    distinct(([{ id }]) => id),
-                    mergeMap((joiningTrigger) =>
-                        joiningTrigger.exhaust$(operables)
-                    )
+                    distinct(({ id }) => id),
+                    mergeMap((joiningTrigger) => {
+                        console.log("JOINING TRIGGER", joiningTrigger.payload);
+                        return joiningTrigger.exhaust$(operables, cancel$);
+                    }),
+                    switchMap((triggers) => {
+                        console.log(
+                            "EXHAUSTED",
+                            triggers.map((t) => t.payload + " " + t.id)
+                        );
+                        const notFound = operables.filter(
+                            (operable) =>
+                                !triggers.some(
+                                    (trigger) => trigger.operable === operable
+                                )
+                        );
+
+                        console.log(notFound.map((o) => o.id));
+
+                        return zip(
+                            of(triggers),
+                            ...notFound.map((operable) =>
+                                operable.$.pipe(take(1))
+                            )
+                        ).pipe(take(1));
+                    }),
+                    map(([triggers, ...rest]) => triggers.concat(rest))
                 );
             })
         )
     );
 
-    operablesOrUpstreams
-        .pipe(takeUntil(combinationOperable.destroy$))
-        .subscribe((operables) => {
-            combinationOperable.upstream$.next(operables);
-        });
+    combinationOperable.destroy$.subscribe(cancel$);
+
+    combinationOperable.upstream$.next(operables$.getValue());
+
+    combinationOperable.upstream$
+        .pipe(distinctUntilChanged(), takeUntil(combinationOperable.destroy$))
+        .subscribe(operables$);
 
     return combinationOperable;
 }
@@ -314,10 +371,7 @@ export function withTriggerGraph(operable, coreOperator) {
                     : inParallel;
 
                 return remainingTriggers$.pipe(
-                    nextOperator(operable, coreOperator, state),
-                    tap((output) => {
-                        console.log("OUTPUT", output.payload);
-                    })
+                    nextOperator(operable, coreOperator, state)
                 );
             })
         );
@@ -376,6 +430,8 @@ function toTriggers(operable, ...fromTriggers) {
                 !Array.isArray(output)
             ) {
                 output = of(output);
+            } else if (output === Trigger) {
+                output = of(null);
             } else {
                 output = from(output);
             }
@@ -468,7 +524,7 @@ export class Trigger {
         return this.findTriggers(query, graph).map((node) => node.payload);
     }
 
-    findTriggers(query, graph) {
+    findTriggers(query, graph = this.fromDag$.getValue()) {
         const topoSort = alg.topsort(graph);
         let result = [];
 
@@ -506,21 +562,27 @@ export class Trigger {
             .postorder(graph, graph.nodes())
             .map((nodeId) => graph.node(nodeId));
     }
-    exhaust$(operables) {
+    exhaust$(operables, cancel$ = EMPTY) {
         return this.toDag$.pipe(
+            debounceTime(1000),
             switchMap((graph) => {
                 const triggers = alg
                     .postorder(graph, graph.nodes())
                     .map((nodeId) => graph.node(nodeId));
 
-                return forkJoin(
-                    triggers.map((trigger) =>
-                        trigger.locks$.pipe(
-                            filter((locks) => locks.length === 0),
-                            take(1)
-                        )
+                // return of(triggers.slice(0, 1));
+                const toJoin = triggers.slice(0, 10).map((trigger) =>
+                    trigger.locks$.pipe(
+                        filter((locks) => locks.length === 0),
+                        map(() => trigger),
+                        take(1)
                     )
-                ).pipe(
+                );
+
+                const nonce = Math.random();
+                console.log("NONCE", nonce);
+                return forkJoin(toJoin).pipe(
+                    tap(() => console.log("FOR JOIN", nonce, triggers.length)),
                     map(() =>
                         triggers.filter((trigger) =>
                             operables.includes(trigger.operable)
@@ -534,14 +596,15 @@ export class Trigger {
                             .join()
                     )
                 );
-            })
+            }),
+            takeUntil(cancel$)
         );
     }
 }
 
-export function createGraph(node, $key, visited = new Set()) {
+export function createGraph(node, $key, reverse = false, visited = new Set()) {
     if (Array.isArray(node)) {
-        return createGraphs(node, $key, visited).pipe(
+        return createGraphs(node, $key, reverse, visited).pipe(
             map((graphs) => mergeGraphs(new Graph(), ...graphs))
         );
     }
@@ -565,7 +628,7 @@ export function createGraph(node, $key, visited = new Set()) {
             }
 
             // Otherwise, recursively create graphs for each child
-            return createGraphs(children, $key, visited).pipe(
+            return createGraphs(children, $key, reverse, visited).pipe(
                 // Combine all child graphs with the current node into a new graph
                 map((childGraphs) => {
                     let combinedGraph = new Graph();
@@ -574,7 +637,8 @@ export function createGraph(node, $key, visited = new Set()) {
                     mergeGraphs(combinedGraph, ...childGraphs);
                     // Connect the current node to its children
                     children.forEach((child) => {
-                        combinedGraph.setEdge(node.id, child.id);
+                        if (reverse) combinedGraph.setEdge(child.id, node.id);
+                        else combinedGraph.setEdge(node.id, child.id);
                     });
 
                     return combinedGraph;
@@ -586,9 +650,9 @@ export function createGraph(node, $key, visited = new Set()) {
     );
 }
 
-export function createGraphs(nodes, $key, visited) {
+export function createGraphs(nodes, $key, reverse, visited) {
     return combineLatest(
-        nodes.map((node) => createGraph(node, $key, new Set(visited)))
+        nodes.map((node) => createGraph(node, $key, reverse, new Set(visited)))
     );
 }
 
@@ -674,4 +738,58 @@ export function findClosestCommonAncestor(graph, nodes) {
     }
 
     return closestAncestor;
+}
+
+function getIncomingEdges(graph, node) {
+    return graph.inEdges(node) || [];
+}
+
+export function getIdealAncestor(_query, $key, reverse = true) {
+    return createGraph(_query, $key, reverse).pipe(
+        map((graph) => {
+            const query = _query.map((node) => node.id);
+            const paths = alg.dijkstraAll(graph);
+            // console.log("PATHS", paths);
+
+            // find all nodes that are reachable by all query nodes
+            const queryPaths = query.map((node) => paths[node]);
+            const ancestors = Object.entries(paths)
+                .filter(([_, paths]) =>
+                    query.every((id) => paths[id].distance < Infinity)
+                )
+                .sort((a, b) => {
+                    // the sum of distances to all query nodes
+                    const aDistance = query.reduce(
+                        (acc, id) => acc + a[1][id].distance,
+                        0
+                    );
+                    const bDistance = query.reduce(
+                        (acc, id) => acc + b[1][id].distance,
+                        0
+                    );
+                    return aDistance - bDistance;
+                });
+
+            // console.log("REACHABLE BY ALL", ancestors);
+            // return first ancestor that can reach all prior ancestors and is reached by all subsequent ancestors
+
+            const res = ancestors.find(([ancestor, paths], index) => {
+                const priorAncestors = ancestors.slice(0, index);
+                const subsequentAncestors = ancestors.slice(index + 1);
+                const canReachAllPrior = priorAncestors.every(
+                    ([a, _]) => paths[a].distance < Infinity
+                );
+                const isReachedByAllSubsequent = subsequentAncestors.every(
+                    ([a, _]) => _[ancestor].distance < Infinity
+                );
+                return canReachAllPrior && isReachedByAllSubsequent;
+            });
+
+            if (!res) {
+                return null;
+            }
+
+            return graph.node(res[0]);
+        })
+    );
 }

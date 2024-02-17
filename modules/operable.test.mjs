@@ -7,6 +7,8 @@ import {
     inSerial,
     withTriggerGraph,
     inParallel,
+    operableCombine,
+    getIdealAncestor,
     // findClosestCommonAncestor,
 } from "./operable.mjs";
 import { Graph, alg } from "graphlib";
@@ -17,6 +19,7 @@ import {
     skip,
     of,
     tap,
+    take,
     filter,
     mergeMap,
     map,
@@ -27,6 +30,85 @@ import {
 } from "rxjs";
 import { z } from "zod";
 import { deepEqual } from "fast-equals";
+
+Deno.test("operableCombine", async () => {
+    const timeouts = [];
+    // Helper function to simulate async operation with random delay
+    const asyncOperation = (letter) => async () => {
+        const delay = Math.floor(Math.random() * 1000);
+
+        await new Promise((resolve) => {
+            timeouts.push(setTimeout(resolve, delay));
+        });
+        return letter + delay;
+    };
+
+    // Graph shape:
+    // graph TB
+    // Z --> A
+    // A[A] --> B[B]
+    // A --> C[C]
+    // B --> D[D]
+    // C --> D
+    // B --> E[E]
+    // C --> F[F]
+    // E --> G[G]
+    // F --> G
+    // D --> H[H]
+    const Z = new Operable(asyncOperation("Z"));
+    const A = new Operable(async () => {
+        await asyncOperation("A")();
+        return ["A1", "A2", "A3"];
+    });
+    const B = new Operable(asyncOperation("B"));
+    const C = new Operable(asyncOperation("C"));
+    const D = new Operable(asyncOperation("D"));
+    const E = new Operable(asyncOperation("E"));
+    const F = new Operable(asyncOperation("F"));
+    const G = new Operable(asyncOperation("G"));
+    const H = new Operable(asyncOperation("H"));
+    Z.id = "Z";
+    A.id = "A";
+    B.id = "B";
+    C.id = "C";
+    D.id = "D";
+    E.id = "E";
+    F.id = "F";
+    G.id = "G";
+    H.id = "H";
+
+    Z.pipe(A);
+    A.pipe(B);
+    A.pipe(C);
+    B.pipe(D);
+    C.pipe(D);
+    B.pipe(E);
+    C.pipe(F);
+    E.pipe(G);
+    F.pipe(G);
+    D.pipe(H);
+
+    // Combine the operables D and H
+    const combinedOperable = operableCombine([G, H], undefined, true);
+    Z.next("trigger");
+
+    const res = await firstValueFrom(combinedOperable.$);
+    console.log("RESULT");
+    assertEquals(res.from$.getValue().length, 12); // each of A's x4 for the two paths to G and H
+    assertEquals(res.find(A).length, 3);
+    assertEquals(res.find(A).sort(), ["A1", "A2", "A3"].sort());
+    assertEquals(res.find(B).length, 3);
+    assertEquals(res.find(C).length, 3);
+    assertEquals(res.find(E).length, 3);
+    assertEquals(res.find(D).length, 6);
+    assertEquals(res.find(F).length, 3);
+    assertEquals(res.find(G).length, 6);
+    assertEquals(res.find(H).length, 6);
+    combinedOperable.destroy();
+
+    timeouts.forEach((timeout) => clearTimeout(timeout));
+    // Assertions will be added here later
+});
 
 Deno.test("getting started", async () => {
     const start = new Operable(of({ subject: "hello world" }));
@@ -357,82 +439,70 @@ Deno.test("multiOutput async generator", async () => {
 
     subscription.unsubscribe();
 });
-Deno.test(
-    "getSharedAncestors should return the smallest number of shared ancestors that cover all given nodes",
-    async () => {
-        // Graph shape:
-        // graph TB
-        // Z --> A
-        // A[A] --> B[B]
-        // A --> C[C]
-        // B --> D[D]
-        // C --> D
-        // B --> E[E]
-        // C --> F[F]
-        // E --> G[G]
-        // F --> G
-        // D --> H[H]
-        // G --> H
-        const Z = new Operable(() => {});
-        const A = new Operable(() => {});
-        const B = new Operable(() => {});
-        const C = new Operable(() => {});
-        const D = new Operable(() => {});
-        const E = new Operable(() => {});
-        const F = new Operable(() => {});
-        const G = new Operable(() => {});
-        const H = new Operable(() => {});
 
-        Z.pipe(A);
-        A.pipe(B);
-        A.pipe(C);
-        B.pipe(D);
-        C.pipe(D);
-        B.pipe(E);
-        C.pipe(F);
-        E.pipe(G);
-        F.pipe(G);
-        D.pipe(H);
-        G.pipe(H);
+Deno.test("getIdealAncestors", async () => {
+    // Graph shape:
+    // graph TB
+    // Z --> A
+    // A[A] --> B[B]
+    // A --> C[C]
+    // B --> D[D]
+    // C --> D
+    // B --> E[E]
+    // C --> F[F]
+    // E --> G[G]
+    // F --> G
+    // D --> H[H]
+    // G --> H
+    const Z = new Operable(() => {});
+    Z.id = "Z";
+    const A = new Operable(() => {});
+    A.id = "A";
+    const B = new Operable(() => {});
+    B.id = "B";
+    const C = new Operable(() => {});
+    C.id = "C";
+    const D = new Operable(() => {});
+    D.id = "D";
+    const E = new Operable(() => {});
+    E.id = "E";
+    const F = new Operable(() => {});
+    F.id = "F";
+    const G = new Operable(() => {});
+    G.id = "G";
+    const H = new Operable(() => {});
+    H.id = "H";
 
-        const graph = await firstValueFrom(createGraph([D, G], "upstream$"));
+    Z.pipe(A);
+    A.pipe(B);
+    A.pipe(C);
+    B.pipe(D);
+    C.pipe(D);
+    B.pipe(E);
+    C.pipe(F);
+    E.pipe(G);
+    F.pipe(G);
+    D.pipe(H);
 
-        const query = [D, G].map((node) => node.id);
-        const paths = alg.dijkstraAll(graph);
+    const ideal = await firstValueFrom(getIdealAncestor([G, H], "upstream$"));
 
-        const ancestors = Object.entries(paths)
-            .filter(([_, paths]) =>
-                query.every((q) => paths[q].distance < Infinity)
-            )
-            .sort((a, b) => {
-                const aDistanceSum = query.reduce(
-                    (sum, q) => sum + a[1][q].distance,
-                    0
-                );
-                const bDistanceSum = query.reduce(
-                    (sum, q) => sum + b[1][q].distance,
-                    0
-                );
-                return aDistanceSum - bDistanceSum;
-            });
+    console.log("ancestors ideal", ideal);
+    assertEquals(ideal, A);
+    // find the first ancestor through which all previous ancestors are reachable
+    // const sharedAncestors = ancestors.find(([ancestor, paths], i) => {
+    //     if (!i) return false;
+    //     const reachableAncestors = ancestors
+    //         .slice(0, i)
+    //         .map(([ancestor]) => ancestor);
 
-        console.log("ancestors", paths, query);
-        // find the first ancestor through which all previous ancestors are reachable
-        // const sharedAncestors = ancestors.find(([ancestor, paths], i) => {
-        //     if (!i) return false;
-        //     const reachableAncestors = ancestors
-        //         .slice(0, i)
-        //         .map(([ancestor]) => ancestor);
+    //     return reachableAncestors.every(
+    //         (reachableAncestor) =>
+    //             paths[reachableAncestor].distance < Infinity
+    //     );
+    // });
 
-        //     return reachableAncestors.every(
-        //         (reachableAncestor) =>
-        //             paths[reachableAncestor].distance < Infinity
-        //     );
-        // });
-
-        // console.log("sharedAncestors", sharedAncestors);
-    }
-);
+    // console.log("sharedAncestors", sharedAncestors);
+});
 
 Deno.test("withTriggerGraph: automatic serialization", async () => {
     const operable = new Operable(() => {});
@@ -585,6 +655,7 @@ Deno.test("inParallel should process triggers concurrently", async () => {
         "Execution time should be less than 5 seconds"
     );
 });
+
 Deno.test("Trigger.find method", async () => {
     // Create Operables
     const operable1 = new Operable(() => {});
