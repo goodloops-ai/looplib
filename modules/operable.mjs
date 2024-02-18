@@ -82,16 +82,46 @@ export class Operable {
         }
     }
 
+    withCachedOutput(pipeline) {
+        const cachePipeline$ = this.input$.pipe(
+            filter((trigger) =>
+                trigger.to$.getValue().some((t) => t.operable === this.id)
+            ),
+            mergeMap((trigger) => {
+                const cached = trigger.to$
+                    .getValue()
+                    .filter((t) => t.operable === this.id)
+                    .map((t) => {
+                        t.operable = this;
+                        return t;
+                    });
+                return from(cached);
+            })
+        );
+
+        const realPipeline$ = this.input$.pipe(
+            filter(
+                (trigger) =>
+                    !trigger.to$.getValue().some((t) => t.operable === this.id)
+            ),
+            pipeline
+        );
+
+        return merge(cachePipeline$, realPipeline$);
+    }
+
     makeOutput$(operableCore) {
         let trigger$ = null;
         if (isOperator(operableCore)) {
             // console.log("OPERATOR");
-            trigger$ = this.input$.pipe(withTriggerGraph(this, operableCore));
+            trigger$ = this.withCachedOutput(
+                withTriggerGraph(this, operableCore)
+            );
         } else if (isAsyncGenerator(operableCore)) {
             // console.log("ASYNC GENERATOR");
             let generator = operableCore();
             generator.next();
-            trigger$ = this.input$.pipe(
+            trigger$ = this.withCachedOutput(
                 withTriggerGraph(
                     this,
                     mergeMap(async (trigger) => {
@@ -101,7 +131,7 @@ export class Operable {
                 )
             );
         } else if (isPureFunction(operableCore)) {
-            trigger$ = this.input$.pipe(
+            trigger$ = this.withCachedOutput(
                 withTriggerGraph(
                     this,
                     mergeMap(async (trigger) => await operableCore(trigger))
@@ -122,10 +152,6 @@ export class Operable {
                                     ? emitted
                                     : [emitted];
 
-                                console.log(
-                                    "EMITTED TRIGGERS",
-                                    triggers.map((t) => t.payload + " " + t.id)
-                                );
                                 return of(Trigger).pipe(
                                     toTriggers(this, ...triggers)
                                 );
@@ -142,8 +168,9 @@ export class Operable {
                     );
                 })
             );
+        } else if (operableCore instanceof Trigger || isPojo(operableCore)) {
+            trigger$ = of(operableCore).pipe(toTriggers(this));
         } else {
-            console.log("UNKNOWN OPERABLE", operableCore);
             trigger$ = from(operableCore).pipe(toTriggers(this));
         }
 
@@ -177,8 +204,17 @@ export class Operable {
         return this;
     }
 
+    flow(fn, fromParentTrigger) {
+        const operables = fn(this);
+        return operableCombine(operables, this, fromParentTrigger);
+    }
+
     destroy() {
         this.destroy$.next();
+    }
+
+    toString() {
+        return this.id;
     }
 }
 
@@ -208,12 +244,7 @@ export function operableCombine(
 
     const operablesWithAncestor$ = operables$.pipe(
         switchMap((operables) => {
-            console.log(
-                "OPERABLES",
-                operables.map((o) => o.id)
-            );
             if (joinAncestor) {
-                console.log("JOIN ANCESTOR", joinAncestor);
                 return of({ operables, ancestor: joinAncestor });
             }
 
@@ -228,11 +259,6 @@ export function operableCombine(
     const combinationOperable = new Operable(
         operablesWithAncestor$.pipe(
             switchMap(({ operables, ancestor }) => {
-                console.log(
-                    "UPSTREAMS",
-                    operables.map((o) => o.id),
-                    ancestor.id
-                );
                 return merge(...operables.map(({ $ }) => $)).pipe(
                     map((trigger) => trigger.findTriggers(ancestor)[0]),
                     mergeMap((joiningTrigger) =>
@@ -244,22 +270,15 @@ export function operableCombine(
                     ),
                     distinct(({ id }) => id),
                     mergeMap((joiningTrigger) => {
-                        console.log("JOINING TRIGGER", joiningTrigger.payload);
                         return joiningTrigger.exhaust$(operables, cancel$);
                     }),
                     switchMap((triggers) => {
-                        console.log(
-                            "EXHAUSTED",
-                            triggers.map((t) => t.payload + " " + t.id)
-                        );
                         const notFound = operables.filter(
                             (operable) =>
                                 !triggers.some(
                                     (trigger) => trigger.operable === operable
                                 )
                         );
-
-                        console.log(notFound.map((o) => o.id));
 
                         return zip(
                             of(triggers),
@@ -421,7 +440,6 @@ function toTriggers(operable, ...fromTriggers) {
             if (output === null || output === undefined || output === false) {
                 output = EMPTY;
             } else if (output instanceof Trigger) {
-                console.log("PASS THROUGH", output.payload);
                 return of(output).pipe(
                     unlockTrigger(operable, ...fromTriggers)
                 );
@@ -516,7 +534,6 @@ export class Trigger {
             const _query = query;
             query = (node) => _query(node.payload);
         } else if (isZodSchema(query)) {
-            console.log("ZOD SCHEMA", query);
             const schema = query;
             query = (node) => schema.safeParse(node.payload).success;
         }
@@ -580,26 +597,91 @@ export class Trigger {
                 );
 
                 const nonce = Math.random();
-                console.log("NONCE", nonce);
                 return forkJoin(toJoin).pipe(
-                    tap(() => console.log("FOR JOIN", nonce, triggers.length)),
                     map(() =>
                         triggers.filter((trigger) =>
                             operables.includes(trigger.operable)
                         )
                     ),
                     filter((triggers) => triggers.length > 0),
-                    distinct((triggers) =>
-                        triggers
-                            .map((trigger) => trigger.id)
-                            .sort()
-                            .join()
+                    distinct(
+                        (triggers) =>
+                            triggers
+                                .map((trigger) => trigger.id)
+                                .sort()
+                                .join(),
+                        cancel$
                     )
                 );
             }),
             takeUntil(cancel$)
         );
     }
+
+    serialize() {
+        return {
+            id: this.id,
+            payload: this.payload,
+            operable: this.operable.toString(),
+            from: this.from$.getValue().map((trigger) => trigger.id),
+            to: this.to$.getValue().map((trigger) => trigger.id),
+        };
+    }
+
+    toJson$() {
+        return this.toDag$.pipe(
+            map((graph) => {
+                return JSON.stringify(
+                    alg
+                        .postorder(graph, graph.nodes())
+                        .map((nodeId) => graph.node(nodeId).serialize())
+                );
+            })
+        );
+    }
+
+    static deserializeGraph(str) {
+        const json = JSON.parse(str);
+        const graph = new Graph();
+
+        for (const triggerJson of json) {
+            graph.setNode(triggerJson.id, triggerJson);
+            triggerJson.to.forEach((toId) => {
+                graph.setEdge(triggerJson.id, toId);
+            });
+        }
+
+        const source = graph.sources()[0];
+
+        return this.deserialize(graph, source);
+    }
+
+    static deserialize(graph, id) {
+        const triggerJson = graph.node(id);
+        const trigger = new Trigger(triggerJson.payload, triggerJson.operable);
+        trigger.id = triggerJson.id;
+
+        graph.setNode(triggerJson.id, trigger);
+
+        trigger.from$.next(
+            triggerJson.from.map((fromId) => {
+                graph.node(fromId) instanceof Trigger
+                    ? graph.node(fromId)
+                    : Trigger.deserialize(graph, fromId);
+            })
+        );
+        trigger.to$.next(
+            triggerJson.to.map((toId) =>
+                graph.node(toId) instanceof Trigger
+                    ? graph.node(toId)
+                    : Trigger.deserialize(graph, toId)
+            )
+        );
+
+        return trigger;
+    }
+
+    static fromJson(json) {}
 }
 
 export function createGraph(node, $key, reverse = false, visited = new Set()) {

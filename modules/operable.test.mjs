@@ -221,7 +221,6 @@ Deno.test("re-using operable", async () => {
 
     resultsOdd.forEach((trigger) => {
         const num = trigger.find(z.number());
-
         assertEquals(trigger.payload.doubled, num * 2);
     });
 });
@@ -891,3 +890,27 @@ Deno.test(
         ]);
     }
 );
+
+Deno.test("Trigger (de)serialization", async () => {
+    // Create a complex DAG of triggers
+    const trigger1 = new Trigger("payload1", "operable1");
+    const trigger2 = new Trigger("payload2", "operable2", trigger1);
+    const trigger3 = new Trigger("payload3", "operable3", trigger1, trigger2);
+
+    // Serialize the DAG
+    const serializedDag = await firstValueFrom(
+        trigger1.toJson$().pipe(take(1))
+    );
+
+    // Deserialize the DAG
+    const shouldBe1 = Trigger.deserializeGraph(serializedDag);
+
+    // Check if the deserialized DAG matches the original DAG
+    assertEquals(shouldBe1.id, trigger1.id);
+    assertEquals(shouldBe1.payload, trigger1.payload);
+    assertEquals(shouldBe1.operable, trigger1.operable);
+    assertEquals(
+        shouldBe1.to$.getValue().map((t) => t.id),
+        [trigger2.id, trigger3.id]
+    );
+});
