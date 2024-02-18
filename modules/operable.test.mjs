@@ -914,3 +914,61 @@ Deno.test("Trigger (de)serialization", async () => {
         [trigger2.id, trigger3.id]
     );
 });
+
+Deno.test("Operable caching behavior", async () => {
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const asyncFn = async (trigger) => {
+        // await delay(1000);
+        console.log("EXEC", trigger.id);
+        return trigger.payload + 1;
+    };
+
+    const operable1 = new Operable(asyncFn);
+    const operable2 = new Operable(asyncFn);
+    const operable3 = new Operable(asyncFn);
+
+    operable1.pipe(operable2, operable3);
+
+    let start = Date.now();
+    const trigger = new Trigger(0, operable1);
+    operable1.next(trigger);
+
+    const result = await firstValueFrom(operable3.$);
+
+    let end = Date.now();
+    let timeDifference = end - start;
+
+    console.log(`OG Time difference: ${timeDifference} ms`);
+    assertEquals(result.payload, 3);
+
+    // Serialize the trigger
+    const serializedTrigger = await firstValueFrom(trigger.toJson$());
+
+    // Deserialize the trigger
+    const deserializedTrigger = Trigger.deserializeGraph(serializedTrigger);
+
+    // Create a new identical pipeline
+    const newOperable1 = new Operable(asyncFn);
+    newOperable1.id = operable1.id;
+    const newOperable2 = new Operable(asyncFn);
+    newOperable2.id = operable2.id;
+    const newOperable3 = new Operable(asyncFn);
+    newOperable3.id = operable3.id;
+
+    newOperable1.pipe(newOperable2, newOperable3);
+    console.log(deserializedTrigger.id, trigger.id);
+    console.log(
+        deserializedTrigger.to$.getValue().map((t) => t.operable),
+        newOperable1.id
+    );
+    start = Date.now();
+    newOperable1.next(deserializedTrigger);
+    const newResult = await firstValueFrom(newOperable3.$);
+    end = Date.now();
+    timeDifference = end - start;
+
+    // console.log(newResult, result);
+    assertEquals(newResult.payload, 3);
+    assertEquals(newResult.id, result.id);
+    console.log("PASS");
+});
