@@ -180,6 +180,8 @@ const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
         })
     );
 
+    const error$ = fromEvent(runner, "error").pipe(ignoreElements());
+
     const deltas$ = fromEvent(runner, "content", (delta, snapshot) => ({
         delta,
         snapshot,
@@ -199,7 +201,7 @@ const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
         ignoreElements()
     );
 
-    return merge(end$, deltas$).pipe(
+    return merge(end$, deltas$, error$).pipe(
         take(1),
         tap((runner) => {
             if (!runner || runner.messages.length === runOpts.messages.length) {
@@ -475,7 +477,22 @@ export const process = (program) => {
                                     })),
                                     complete: true,
                                 })
-                            )
+                            ),
+                            catchError((e) => {
+                                evaluation.incrementalPatch({
+                                    state: {
+                                        messages: messages,
+                                        complete: true,
+                                    },
+                                    packets: [
+                                        {
+                                            type: "error",
+                                            data: e.toString(),
+                                        },
+                                    ],
+                                    complete: true,
+                                });
+                            })
                         );
                     }
 
