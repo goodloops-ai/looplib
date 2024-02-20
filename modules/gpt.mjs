@@ -181,6 +181,7 @@ const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
     );
 
     const error$ = fromEvent(runner, "error").pipe(ignoreElements());
+    const abort$ = fromEvent(runner, "abort").pipe(ignoreElements());
 
     const deltas$ = fromEvent(runner, "content", (delta, snapshot) => ({
         delta,
@@ -201,7 +202,7 @@ const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
         ignoreElements()
     );
 
-    return merge(end$, deltas$, error$).pipe(
+    return merge(end$, deltas$, error$, abort$).pipe(
         take(1),
         tap((runner) => {
             if (!runner || runner.messages.length === runOpts.messages.length) {
