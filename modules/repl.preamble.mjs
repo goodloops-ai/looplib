@@ -1,5 +1,5 @@
-import { Operable } from "./modules/operable.mjs";
-import { of } from "rxjs";
+import { Operable, Trigger } from "./modules/operable.mjs";
+import { switchMap, take, debounceTime, Subject } from "rxjs";
 
 function getAllConstVariableNames(code) {
     const regex = /const\s+([a-zA-Z_$][0-9a-zA-Z_$]*)\s*=/gm;
@@ -19,6 +19,7 @@ async function idAllConsts(code) {
             await new Promise((resolve) => setTimeout(resolve, 0));
             try {
                 eval(`${v}.id = "${v}"`);
+                console.log("ID", v, i);
                 break;
             } catch (e) {
                 i++;
@@ -26,11 +27,17 @@ async function idAllConsts(code) {
         }
     }
 }
+
+const injector = new Subject();
+const input$ = new Operable(() => true);
+input$.id = "input$";
+
 (async () => {
     const filename = Deno.env.get("DENO_REPL_HISTORY");
     if (filename) {
         let lastText = await Deno.readTextFile(filename);
-        idAllConsts(lastText, 1000);
+        await idAllConsts(lastText, 1000);
+        await restoreState();
         for await (const event of Deno.watchFs(filename)) {
             if (event.kind === "modify") {
                 // The file has been modified, read the file
@@ -43,4 +50,19 @@ async function idAllConsts(code) {
     }
 })();
 
-const input$ = new Operable(of({ type: "input", data: { id: "input" } }));
+async function restoreState() {
+    const stateFile =
+        Deno.env.get("DENO_REPL_STATE") ||
+        Deno.env.get("DENO_REPL_HISTORY") + ".state";
+
+    const state = await Deno.readTextFile(stateFile).catch((e) => null);
+    const trigger = state
+        ? Trigger.deserializeGraph(state)
+        : new Trigger(0, input$);
+
+    input$.next(trigger);
+
+    trigger.toJson$().subscribe((json) => {
+        Deno.writeTextFile(stateFile, json);
+    });
+}

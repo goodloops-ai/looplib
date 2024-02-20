@@ -83,22 +83,6 @@ export class Operable {
     }
 
     withCachedOutput(pipeline) {
-        const cachePipeline$ = this.input$.pipe(
-            filter((trigger) =>
-                trigger.to$.getValue().some((t) => t.operable === this.id)
-            ),
-            mergeMap((trigger) => {
-                const cached = trigger.to$
-                    .getValue()
-                    .filter((t) => t.operable === this.id)
-                    .map((t) => {
-                        t.operable = this;
-                        return t;
-                    });
-                return from(cached);
-            })
-        );
-
         const realPipeline$ = this.input$.pipe(
             filter(
                 (trigger) =>
@@ -107,7 +91,25 @@ export class Operable {
             pipeline
         );
 
-        return merge(cachePipeline$, realPipeline$);
+        const cachePipeline$ = this.input$.pipe(
+            filter((trigger) =>
+                trigger.to$.getValue().some((t) => t.operable === this.id)
+            ),
+            mergeMap((trigger) => {
+                const cached = trigger.to$
+                    .getValue()
+                    .filter(
+                        (t) => t.operable === this.id || t.operable === this
+                    )
+                    .map((t) => {
+                        t.operable = this;
+                        return t;
+                    });
+                return from(cached);
+            })
+        );
+
+        return merge(realPipeline$, cachePipeline$);
     }
 
     makeOutput$(operableCore) {
@@ -138,6 +140,7 @@ export class Operable {
                 )
             );
         } else if (isObservable(operableCore)) {
+            console.log("OBSERVABLE");
             const core = operableCore;
             trigger$ = core.pipe(
                 take(1),
@@ -619,6 +622,7 @@ export class Trigger {
     }
 
     serialize() {
+        // console.log("SERIALIZE", this.id, this.from$.getValue());
         return {
             id: this.id,
             payload: this.payload,
@@ -633,8 +637,10 @@ export class Trigger {
             map((graph) => {
                 return JSON.stringify(
                     alg
-                        .postorder(graph, graph.nodes())
-                        .map((nodeId) => graph.node(nodeId).serialize())
+                        .topsort(graph)
+                        .map((nodeId) => graph.node(nodeId).serialize()),
+                    null,
+                    2
                 );
             })
         );
@@ -659,16 +665,17 @@ export class Trigger {
     static deserialize(graph, id) {
         const triggerJson = graph.node(id);
         const trigger = new Trigger(triggerJson.payload, triggerJson.operable);
+        // console.log("SET ID", triggerJson.id);
         trigger.id = triggerJson.id;
 
         graph.setNode(triggerJson.id, trigger);
 
         trigger.from$.next(
-            triggerJson.from.map((fromId) => {
+            triggerJson.from.map((fromId) =>
                 graph.node(fromId) instanceof Trigger
                     ? graph.node(fromId)
-                    : Trigger.deserialize(graph, fromId);
-            })
+                    : Trigger.deserialize(graph, fromId)
+            )
         );
         trigger.to$.next(
             triggerJson.to.map((toId) =>
@@ -750,80 +757,6 @@ export function mergeGraphs(target, ...graphs) {
     });
 
     return target;
-}
-
-function findAllAncestors(graph, startNode) {
-    let ancestors = new Set();
-    let visited = new Set();
-    let stack = [startNode];
-
-    while (stack.length > 0) {
-        let currentNode = stack.pop();
-        if (!visited.has(currentNode)) {
-            visited.add(currentNode);
-            let predecessors = graph.predecessors(currentNode);
-            if (predecessors) {
-                predecessors.forEach((pred) => {
-                    ancestors.add(pred);
-                    stack.push(pred);
-                });
-            }
-        }
-    }
-
-    return ancestors;
-}
-
-export function findClosestCommonAncestor(graph, nodes) {
-    let allAncestors = nodes.map((node) => findAllAncestors(graph, node));
-    let commonAncestors = allAncestors.reduce((acc, ancestors) => {
-        return new Set([...acc].filter((x) => ancestors.has(x)));
-    });
-
-    // console.log("COMMON ANCESTORS", commonAncestors);
-
-    let closestAncestor = null;
-    let closestDistance = Infinity;
-    commonAncestors.forEach((ancestor) => {
-        let isAncestorOfAll = allAncestors.every((ancestors) =>
-            ancestors.has(ancestor)
-        );
-        if (isAncestorOfAll) {
-            let distance = alg.dijkstra(
-                graph,
-                ancestor,
-                null,
-                graph.nodeEdges.bind(graph)
-            );
-            let minDistance = Math.min(
-                ...nodes.map((node) => distance[node].distance)
-            );
-            if (minDistance < closestDistance) {
-                closestDistance = minDistance;
-                closestAncestor = ancestor;
-            }
-        }
-    });
-
-    // Verify that the closest ancestor is not bypassed by any other common ancestor
-    if (closestAncestor) {
-        let bypassed = Array.from(commonAncestors).some((ancestor) => {
-            return (
-                ancestor !== closestAncestor &&
-                allAncestors.some((ancestors) => ancestors.has(ancestor))
-            );
-        });
-
-        if (bypassed) {
-            return null;
-        }
-    }
-
-    return closestAncestor;
-}
-
-function getIncomingEdges(graph, node) {
-    return graph.inEdges(node) || [];
 }
 
 export function getIdealAncestor(_query, $key, reverse = true) {
