@@ -53,6 +53,8 @@ export class ConfigurableOperator {
 }
 
 export class Operable {
+    __isOperable = true;
+
     constructor(operableCore, upstreams = []) {
         this.id = uuid();
         this.upstream$ = new BehaviorSubject(upstreams);
@@ -115,6 +117,9 @@ export class Operable {
     }
 
     makeOutput$(operableCore) {
+        if (Deno.env.get("DEBUG")) {
+            console.log("MAKE OUTPUT", this.id, operableCore);
+        }
         let trigger$ = null;
         if (isOperator(operableCore)) {
             // console.log("OPERATOR");
@@ -194,7 +199,7 @@ export class Operable {
             return this;
         }
 
-        if (!(next instanceof Operable)) {
+        if (!next.__isOperable) {
             next = new Operable(next);
         }
 
@@ -235,7 +240,7 @@ export class Operable {
 }
 
 export function operableFrom(operableCore) {
-    if (operableCore instanceof Operable) {
+    if (operableCore.__isOperable) {
         return operableCore;
     }
 
