@@ -1,6 +1,16 @@
 import { Operable, Trigger } from "./modules/operable.mjs";
 import { switchMap, take, debounceTime, Subject } from "rxjs";
 
+try {
+    const { load } = await import(
+        "https://deno.land/std@0.214.0/dotenv/mod.ts"
+    );
+    await load({ export: true });
+    console.log("loaded .env", window.Deno?.env?.get?.("OPENAI_API_KEY"));
+} catch (e) {}
+
+const { prompt, ask, guard } = await import("./modules/gpt.mjs");
+
 function getAllConstVariableNames(code) {
     const regex = /const\s+([a-zA-Z_$][0-9a-zA-Z_$]*)\s*=/gm;
     let match;
@@ -19,7 +29,6 @@ async function idAllConsts(code) {
             await new Promise((resolve) => setTimeout(resolve, 0));
             try {
                 eval(`${v}.id = "${v}"`);
-                console.log("ID", v, i);
                 break;
             } catch (e) {
                 i++;
@@ -28,7 +37,6 @@ async function idAllConsts(code) {
     }
 }
 
-const injector = new Subject();
 const input$ = new Operable(() => true);
 input$.id = "input$";
 

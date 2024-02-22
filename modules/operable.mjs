@@ -30,6 +30,7 @@ import {
     asyncScheduler,
     observeOn,
     distinctUntilChanged,
+    catchError,
 } from "rxjs";
 
 import { Graph, alg } from "graphlib";
@@ -83,6 +84,7 @@ export class Operable {
     }
 
     withCachedOutput(pipeline) {
+        const nonce = Math.random();
         const realPipeline$ = this.input$.pipe(
             filter(
                 (trigger) =>
@@ -140,7 +142,7 @@ export class Operable {
                 )
             );
         } else if (isObservable(operableCore)) {
-            console.log("OBSERVABLE");
+            // console.log("OBSERVABLE");
             const core = operableCore;
             trigger$ = core.pipe(
                 take(1),
@@ -177,7 +179,14 @@ export class Operable {
             trigger$ = from(operableCore).pipe(toTriggers(this));
         }
 
-        return trigger$.pipe(delay(0), shareReplay(1));
+        return trigger$.pipe(
+            delay(0),
+            catchError((e) => {
+                console.error(e);
+                return EMPTY;
+            }),
+            shareReplay(1)
+        );
     }
 
     pipe(next, ...rest) {
@@ -194,6 +203,10 @@ export class Operable {
         addToBehaviorSubject(next.upstream$, this);
 
         return next.pipe(...rest);
+    }
+
+    connect(next, ...rest) {
+        return this.pipe(next, ...rest);
     }
 
     unpipe(next) {
@@ -272,8 +285,17 @@ export function operableCombine(
                             : of(joiningTrigger)
                     ),
                     distinct(({ id }) => id),
+                    tap((trigger) =>
+                        console.log("got joining trigger", trigger.id)
+                    ),
                     mergeMap((joiningTrigger) => {
                         return joiningTrigger.exhaust$(operables, cancel$);
+                    }),
+                    tap((triggers) => {
+                        console.log(
+                            "got exhaust triggers",
+                            triggers.map((t) => t.id)
+                        );
                     }),
                     switchMap((triggers) => {
                         const notFound = operables.filter(
@@ -307,35 +329,6 @@ export function operableCombine(
     return combinationOperable;
 }
 
-export function closestSharedAncestor(operables) {
-    const visited = new Map();
-    const queue = [...operables];
-    let rootAncestor = null;
-
-    for (const operable of operables) {
-        visited.set(operable, 1);
-    }
-
-    while (queue.length > 0) {
-        const current = queue.shift();
-        const nextOperables = current.upstream$.getValue();
-
-        for (const next of nextOperables) {
-            if (!visited.has(next)) {
-                visited.set(next, 1);
-                queue.push(next);
-            } else {
-                visited.set(next, visited.get(next) + 1);
-            }
-            if (visited.get(next) === operables.length) {
-                rootAncestor = next;
-            }
-        }
-    }
-
-    return rootAncestor;
-}
-
 export function inSerial(operable, coreOperator, state) {
     return concatMap((inputTrigger) => {
         inputTrigger.previous = state.previous;
@@ -361,10 +354,11 @@ export function inParallel(operable, coreOperator) {
 export function withTriggerGraph(operable, coreOperator) {
     return (input$) => {
         const state = { previous: null };
-        const source$ = input$.pipe(lockTrigger(operable));
+        const source$ = input$.pipe(lockTrigger(operable), shareReplay(1000));
 
         const firstTrigger$ = source$.pipe(
             take(1),
+            tap(() => console.log(operable.id, "running first task in serial")),
             inSerial(operable, coreOperator, state),
             shareReplay(1)
         );
@@ -380,7 +374,7 @@ export function withTriggerGraph(operable, coreOperator) {
             take(1)
         );
 
-        const remainingTriggers$ = source$.pipe(skip(1));
+        const remainingTriggers$ = source$.pipe(skip(1), shareReplay(1000));
 
         const subsequentTriggers$ = zip(
             merge(firstTrigger$, firstTriggerDone$),
@@ -388,6 +382,11 @@ export function withTriggerGraph(operable, coreOperator) {
         ).pipe(
             take(1),
             switchMap(([_, firstInputTrigger]) => {
+                console.log(
+                    operable.id,
+                    "running subsequent tasks in",
+                    firstInputTrigger?.checkedPrevious ? "serial" : "parallel"
+                );
                 const nextOperator = firstInputTrigger?.checkedPrevious
                     ? inSerial
                     : inParallel;
@@ -406,7 +405,9 @@ function isOperator(operableCore) {
     // console.log("IS OPERATOR", operableCore.toString());
     return (
         operableCore.toString() ===
-        `e=>{if(xr(e))return e.lift(function(t){try{return r(t,this)}catch(o){this.error(o)}});throw new TypeError("Unable to lift unknown Observable type")}`
+            "function(t){return r.reduce((o,n)=>n(o),t)}" ||
+        operableCore.toString() ===
+            `e=>{if(xr(e))return e.lift(function(t){try{return r(t,this)}catch(o){this.error(o)}});throw new TypeError("Unable to lift unknown Observable type")}`
     );
 }
 
@@ -467,13 +468,13 @@ function toTriggers(operable, ...fromTriggers) {
     );
 }
 
-function addToBehaviorSubject(behaviorSubject, ...values) {
+export function addToBehaviorSubject(behaviorSubject, ...values) {
     behaviorSubject.next(
         Array.from(new Set(behaviorSubject.getValue().concat(values)))
     );
 }
 
-function removeFromBehaviorSubject(behaviorSubject, ...values) {
+export function removeFromBehaviorSubject(behaviorSubject, ...values) {
     behaviorSubject.next(
         behaviorSubject.getValue().filter((value) => !values.includes(value))
     );
@@ -507,6 +508,7 @@ export class Trigger {
     fromDag$ = new BehaviorSubject([]); // BehaviorSubject for the DAG
     toDag$ = new BehaviorSubject([]); // BehaviorSubject for the DAG
     to$ = new BehaviorSubject([]);
+    states$ = new BehaviorSubject([]);
 
     constructor(payload, operable, ...from) {
         this.id = uuid(); // unique identifier flag
@@ -591,7 +593,7 @@ export class Trigger {
                     .map((nodeId) => graph.node(nodeId));
 
                 // return of(triggers.slice(0, 1));
-                const toJoin = triggers.slice(0, 10).map((trigger) =>
+                const toJoin = triggers.map((trigger) =>
                     trigger.locks$.pipe(
                         filter((locks) => locks.length === 0),
                         map(() => trigger),
@@ -607,16 +609,10 @@ export class Trigger {
                         )
                     ),
                     filter((triggers) => triggers.length > 0),
-                    distinct(
-                        (triggers) =>
-                            triggers
-                                .map((trigger) => trigger.id)
-                                .sort()
-                                .join(),
-                        cancel$
-                    )
+                    delay(2000)
                 );
             }),
+            take(1),
             takeUntil(cancel$)
         );
     }

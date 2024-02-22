@@ -179,6 +179,7 @@ const importModuleOrString = (node) => async (str) => {
                 of(trigger).pipe(
                     mergeMap(async (arg) => await mod.default(arg), 100),
                     tap((packets) => {
+                        console.log("PACKETS FROM FN", node.id, packets);
                         trigger.sendOutput(packets);
                     })
                 )

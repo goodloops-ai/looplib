@@ -5,41 +5,42 @@ import {
     map,
     switchMap,
     catchError,
-    of,
     concatMap,
-    zip,
     from,
     withLatestFrom,
     startWith,
     fromEvent,
     filter,
     concat,
-    Subject,
     take,
-    toArray,
     takeUntil,
     buffer,
+    of,
+    zip,
     tap,
     mergeMap,
     pipe,
     shareReplay,
     distinctUntilChanged,
-    skip,
+    EMPTY,
+    firstValueFrom,
+    timeout,
+    pluck,
+    Subject,
+    ignoreElements,
+    merge,
 } from "rxjs";
 import { deepEqual } from "fast-equals";
-import { v4 as uuidv4 } from "uuid";
-import { EMPTY } from "https://esm.sh/rxjs@7.8.1";
-
-export const OPENAI_KEY = "OPENAI_KEY";
-export const ENV = [OPENAI_KEY];
+export const OPENAI_API_KEY = "OPENAI_API_KEY";
+export const ENV = [OPENAI_API_KEY];
 
 export const schemas = (program) =>
     program.collection.database.getLocal$("ENV").pipe(
         filter(Boolean),
-        switchMap((env) => env.get$(OPENAI_KEY)),
+        switchMap((env) => env.get$(OPENAI_API_KEY)),
         filter(Boolean),
-        startWith(OPENAI_KEY),
-        map((openai_key) =>
+        startWith(OPENAI_API_KEY),
+        map((OPENAI_API_KEY) =>
             z.union([
                 z.object({
                     type: z.literal("config"),
@@ -54,26 +55,32 @@ export const schemas = (program) =>
                             .max(1)
                             .step(0.1)
                             .default(0.3),
-                        model: z
-                            .enum([
-                                "gpt-4",
-                                "gpt-4-turbo-preview",
-                                "gpt-4-0125-preview",
-                                "gpt-3.5-turbo-0613",
-                                "gpt-4-1106-preview",
-                                "gpt-3.5-turbo-1106",
-                                "gpt-3.5-turbo-16k",
-                                "gpt-4-vision-preview",
-                            ])
-                            .default("gpt-4-turbo-preview"),
-                        key: z.string().default(openai_key),
+                        model: z.string().default("gpt-4-0125-preview"),
+                        key: z.string().default(OPENAI_API_KEY),
+                        guard: z.boolean().default(false),
+                        n: z.number().default(1),
+                        branch: z.boolean().default(false),
+                        includeAllContext: z.boolean().default(false),
                     }),
                 }),
                 z.object({
                     type: z.literal("message"),
                     data: z.object({
-                        role: z.enum(["user", "assistant", "system"]),
-                        content: z.string(),
+                        role: z.enum(["user", "assistant", "system", "tool"]),
+                        content: z.union([z.string(), z.null()]).optional(),
+                        tool_call_id: z.string().optional(),
+                        tool_calls: z
+                            .array(
+                                z.object({
+                                    id: z.string(),
+                                    type: z.literal("function"),
+                                    function: z.object({
+                                        name: z.string(),
+                                        arguments: z.string(),
+                                    }),
+                                })
+                            )
+                            .optional(),
                     }),
                 }),
                 z.object({
@@ -109,106 +116,117 @@ export const schemas = (program) =>
         )
     );
 
-export const connect = (program) =>
-    pipe(
-        // tap((input) => console.log("GPT GUARD GOT INPUT", input.packets)),
-        withLatestFrom(
-            combineLatest({
-                guard: program.get$("guard"),
-                translate: program.get$("translate"),
-            }).pipe(
-                map(({ guard, translate }) =>
-                    guard || translate
-                        ? [
-                              {
-                                  type: "tool",
-                                  force: true,
-                                  data: {
-                                      type: "function",
-                                      function: {
-                                          name: "guarded_transform",
-                                          function: `runner.abort()`,
-                                          parse: `JSON.parse(args)`,
-                                          description:
-                                              "invoke this function to answer the users question",
-                                          parameters: {
-                                              type: "object",
-                                              description:
-                                                  "your answer to the last question posed by the user.",
-                                              properties: {
-                                                  explanation: {
-                                                      type: "string",
-                                                  },
-                                                  ...(guard
-                                                      ? {
-                                                            bool: {
-                                                                type: "boolean",
-                                                                description:
-                                                                    "if the answer is YES, set to true. If the answer is NO, set to false",
-                                                            },
-                                                        }
-                                                      : {}),
-                                              },
-                                          },
-                                      },
-                                  },
-                              },
-                          ]
-                        : null
-                )
-            )
-        ),
-        mergeMap(([input, extraPacket]) => {
-            if (!extraPacket) return true;
+const guard = async (parameters, runner, evaluation) => {
+    runner.abort();
+    await evaluation.incrementalPatch({
+        complete: true,
+        terminal: !parameters.answer,
+    });
+};
 
-            return of(
-                program.collection.database.states.upsert({
-                    id: uuidv4(),
-                    flow: program.flow,
-                })
-            ).pipe(
-                map((state) => ({
-                    state: state,
-                    packets: input
-                        .map(({ packets }) => packets)
-                        .flat()
-                        .concat(extraPacket),
-                })),
-                process(program),
-                map((packets) => {
-                    const answer = packets.some(({ data: { tool_calls } }) =>
-                        tool_calls?.some(
-                            (call) =>
-                                call.function.name === "answer_question" &&
-                                JSON.parse(call.function.arguments).bool
-                        )
-                    );
+let total = 0;
+let completed = 0;
 
-                    console.log("GUARD RESULT", program.id, answer);
+const guardTool = {
+    type: "tool",
+    force: true,
+    data: {
+        type: "function",
+        function: {
+            name: "answer_question",
+            function: guard.toString(),
+            parse: `JSON.parse(args)`,
+            description: "invoke this function to answer the users question",
+            parameters: {
+                type: "object",
+                description:
+                    "your answer to the last question posed by the user.",
+                properties: {
+                    explanation: {
+                        type: "string",
+                    },
+                    answer: {
+                        type: "boolean",
+                        description:
+                            "if the answer is YES, set to true. If the answer is NO, set to false",
+                    },
+                },
+            },
+        },
+    },
+};
 
-                    return answer;
-                })
-            );
+let ends = 0;
+
+const retryRunner = (fn, runOpts, evaluation, retries = 0) => {
+    const runner = fn(runOpts);
+
+    const timeout$ = new Subject();
+
+    const end$ = fromEvent(runner, "end").pipe(
+        map(() => runner),
+        // tap(() => console.log("END", ++ends)),
+        timeout({
+            each: 60 * 1000,
+            with: () => {
+                // console.log("timeout", retries);
+                timeout$.next(true);
+                if (retries < 5) {
+                    return retryRunner(fn, runOpts, evaluation, ++retries);
+                } else {
+                    return of(null);
+                }
+            },
         })
     );
 
-const a = {
-    type: "message",
-    data: {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-            {
-                id: "call_t47UzNExob7svnfexQA0Ju6p",
-                type: "function",
-                function: {
-                    name: "answer_question",
-                    arguments: '{"bool":true}',
+    const error$ = fromEvent(runner, "error").pipe(ignoreElements());
+    const abort$ = fromEvent(runner, "abort").pipe(ignoreElements());
+
+    const deltas$ = fromEvent(runner, "content", (delta, snapshot) => ({
+        delta,
+        snapshot,
+    })).pipe(
+        // tap((data) => {
+        //     console.log(data);
+        // }),
+        takeUntil(merge(end$, timeout$)),
+        concatMap(async (data) => {
+            return evaluation.incrementalPatch({
+                state: {
+                    ...evaluation.state,
+                    ...data,
                 },
-            },
-        ],
-    },
+            });
+        }),
+        ignoreElements()
+    );
+
+    return merge(end$, deltas$, error$, abort$).pipe(
+        take(1),
+        tap((runner) => {
+            if (!runner || runner.messages.length === runOpts.messages.length) {
+                console.log("failed");
+                evaluation.incrementalPatch({
+                    packets: [
+                        { type: "error", data: "failed to make gpt request" },
+                    ],
+                    complete: true,
+                    terminal: true,
+                });
+            } else {
+                // console.log("complete");
+                evaluation.incrementalPatch({
+                    packets: runner.messages
+                        .slice(runOpts.messages.length - 1)
+                        .map((data) => ({ type: "message", data })),
+                    complete: true,
+                });
+            }
+        })
+    );
 };
+
 export const process = (program) => {
     return (input$) => {
         const config$ = combineLatest(
@@ -220,10 +238,22 @@ export const process = (program) => {
                 return schema.parse({ type: "config", data: config });
             }),
             map(({ data }) => data),
-            filter(({ key, prompt }) => key !== OPENAI_KEY && prompt),
+            filter(({ key, prompt }) => key !== OPENAI_API_KEY && prompt),
             distinctUntilChanged(deepEqual),
             // tap((c) => console.log("parsed config data", program.id, c)),
             shareReplay(1)
+        );
+
+        const client$ = config$.pipe(
+            pluck("key"),
+            distinctUntilChanged(),
+            map(
+                (key) =>
+                    new OpenAI({
+                        dangerouslyAllowBrowser: true,
+                        apiKey: key,
+                    })
+            )
         );
 
         return concat(
@@ -235,34 +265,121 @@ export const process = (program) => {
             ),
             input$
         ).pipe(
-            // tap(console.log.bind(console, program.id, "main input")),
-            distinctUntilChanged(deepEqual),
-            // tap(console.log.bind(console, program.id, "distinct")),
-            withLatestFrom(schemas(program)),
             // tap(console.log.bind(console, program.id, "withLatestSchema")),
-            map(([{ packets, state }, schemas]) => ({
-                state,
-                messages: packets
-                    .filter(({ type }) => type !== "config" && type !== "tool")
-                    .map(schemas.parse)
-                    .map(({ data }) => data),
-                tools: packets.filter(({ type }) => type === "tool"),
+            mergeMap(async (trigger) => ({
+                trigger,
+                evaluation: await firstValueFrom(trigger.createEval()),
+            })),
+            mergeMap(async ({ trigger, evaluation }) => ({
+                trigger,
+                evaluation,
+                context: await evaluation.getContext(),
             })),
             // tap(console.log.bind(console, program.id, "mapped input")),
-            withLatestFrom(config$),
+            withLatestFrom(config$, schemas(program), client$),
             // tap(console.log.bind(console, program.id, "withLatest config")),
             mergeMap(
-                ([{ messages: _messages, state, tools: _tools }, config]) => {
-                    const openai = new OpenAI({
-                        apiKey: config.key,
-                        dangerouslyAllowBrowser: true,
-                    });
+                ([
+                    { trigger, evaluation, context },
+                    config,
+                    schemas,
+                    openai,
+                ]) => {
+                    // console.log("CONTEXT", context);
 
-                    const messages = _messages.concat({
-                        role: config.role,
-                        content: config.prompt,
-                    });
+                    const messages = [
+                        // {
+                        //     role: "system",
+                        //     content: [
+                        //         `You must engage in a multithreaded conversation.`,
+                        //         `Messages are organized into threads. System messages will direct your navigation through the conversation.`,
+                        //         `Observe the "BEGIN_MESSAGE_GROUP" and "END_MESSAGE_GROUP" indicators to identify the commencement and termination of a message group.`,
+                        //         `The "BEGIN_MESSAGE_GROUP" will contain a "GROUP_ID". Utilize this ID to correlate all messages within the group.`,
+                        //         `The "END_MESSAGE_GROUP" denotes the end of a group and will restate the "GROUP_ID" for confirmation.`,
+                        //         `All messages between these indicators constitute a single thread and must be treated as a unified conversation.`,
+                        //         `System messages will enumerate "PARENT_GROUPS" to delineate the connections between message groups.`,
+                        //         `Message groups are considered continuations of their associated "PARENT_GROUPS"`,
+                        //         `Adhere strictly to these system messages to navigate the threaded conversation accurately, particularly when threads merge or are isolated.`,
+                        //         `NEVER insert "END_MESSAGE_GROUP" messages yourself; this will be taken care of for you`,
+                        //     ].join("\n"),
+                        // },
+                    ].concat(
+                        context
+                            .map(({ packets, id, parents }) =>
+                                (packets
+                                    ? [
+                                          //   {
+                                          //       type: "message",
+                                          //       data: {
+                                          //           role: "system",
+                                          //           content: [
+                                          //               `BEGIN_MESSAGE_GROUP`,
+                                          //               `GROUP_ID: ${id}`,
+                                          //               `PARENT_GROUPS:`,
+                                          //               parents,
+                                          //           ]
+                                          //               .flat()
+                                          //               .join("\n"),
+                                          //       },
+                                          //   },
+                                      ]
+                                    : []
+                                )
+                                    .concat(packets || [])
+                                    .concat(
+                                        packets
+                                            ? [
+                                                  //   {
+                                                  //       type: "message",
+                                                  //       data: {
+                                                  //           role: "system",
+                                                  //           content: [
+                                                  //               `END_MESSAGE_GROUP`,
+                                                  //               `GROUP_ID: ${id}`,
+                                                  //           ].join("\n"),
+                                                  //       },
+                                                  //   },
+                                              ]
+                                            : []
+                                    )
+                            )
+                            .flat()
+                            .filter(({ type }) =>
+                                config.includeAllContext
+                                    ? type !== "tool"
+                                    : type === "message"
+                            )
+                            .map(schemas.parse)
+                            .map(({ data }) => data)
+                            .concat([
+                                // {
+                                //     role: "system",
+                                //     content: [
+                                //         `BEGIN_MESSAGE_GROUP`,
+                                //         `GROUP_ID: ${evaluation.id}`,
+                                //         `PARENT_GROUPS:`,
+                                //         evaluation.parents,
+                                //     ]
+                                //         .flat()
+                                //         .join("\n"),
+                                // },
+                                {
+                                    role: config.role,
+                                    content: config.prompt,
+                                },
+                            ])
+                    );
 
+                    const _tools = context
+                        .map(({ packets }) => packets || [])
+                        .flat()
+                        .filter(({ type }) => type === "tool");
+
+                    if (config.guard) {
+                        _tools.push(guardTool);
+                    }
+                    // console.log("dispatch GPT REQUEST", ++total);
+                    // console.log("TOOLS", _tools);
                     const fKey = _tools.length > 0 ? "runTools" : "stream";
 
                     const tools = _tools.map(
@@ -278,18 +395,109 @@ export const process = (program) => {
                         }) => ({
                             type,
                             function: {
-                                function: new Function(
-                                    "parameters",
-                                    "runner",
-                                    fnStr
-                                ),
-                                parse: new Function("args", pStr),
+                                function: async (parameters, runner) => {
+                                    // console.log(
+                                    //     "got tool invokation",
+                                    //     parameters,
+                                    //     runner
+                                    // );
+                                    const fn = new Function(
+                                        "parameters",
+                                        "runner",
+                                        "evaluation",
+                                        `return (${fnStr})(parameters,runner,evaluation)`
+                                    );
+
+                                    const res = await fn(
+                                        parameters,
+                                        runner,
+                                        evaluation
+                                    );
+                                    // console.log("result", res);
+                                    return res;
+                                },
+                                parse: (args) => {
+                                    // console.log("got args", args);
+                                    const parse = new Function("args", pStr);
+                                    return JSON.parse(args);
+                                },
                                 ...def,
                             },
                         })
                     );
 
-                    const runner = openai.beta.chat.completions[fKey]({
+                    if (config.n > 1) {
+                        return from(
+                            openai.chat.completions.create({
+                                messages,
+                                model: config.model,
+                                temperature: config.temperature,
+                                n: config.n,
+                            })
+                        ).pipe(
+                            switchMap((res) => {
+                                if (config.branch) {
+                                    const evals$ = concat(
+                                        of(evaluation),
+                                        trigger.createEvals(config.n - 1)
+                                    );
+
+                                    const pre = [messages.pop()];
+
+                                    const messages$ = from(
+                                        res.choices.map(({ message }) =>
+                                            pre.concat([message])
+                                        )
+                                    );
+
+                                    return zip(messages$, evals$);
+                                } else {
+                                    const evals$ = of(evaluation);
+
+                                    const msgs$ = of(
+                                        [messages.pop()].concat(
+                                            res.choices.map(
+                                                ({ message }) => message
+                                            )
+                                        )
+                                    );
+
+                                    return zip(msgs$, evals$);
+                                }
+                            }),
+                            take(config.branch ? config.n : 1),
+                            tap(([messages, evaluation]) =>
+                                evaluation.incrementalPatch({
+                                    state: {
+                                        messages: messages,
+                                        complete: true,
+                                    },
+                                    packets: messages.map((msg) => ({
+                                        type: "message",
+                                        data: msg,
+                                    })),
+                                    complete: true,
+                                })
+                            ),
+                            catchError((e) => {
+                                evaluation.incrementalPatch({
+                                    state: {
+                                        messages: messages,
+                                        complete: true,
+                                    },
+                                    packets: [
+                                        {
+                                            type: "error",
+                                            data: e.toString(),
+                                        },
+                                    ],
+                                    complete: true,
+                                });
+                            })
+                        );
+                    }
+
+                    const runOpts = {
                         stream: true,
                         messages,
                         model: config.model,
@@ -307,57 +515,22 @@ export const process = (program) => {
                                   },
                               }
                             : {}),
-                    });
+                    };
 
-                    const end$ = fromEvent(runner, "end").pipe(
-                        withLatestFrom(state.$),
-                        tap(([_, state]) => {
-                            state.incrementalPatch({
-                                data: {
-                                    ...state.data,
-                                    complete: true,
-                                },
-                            });
-                            deltas.unsubscribe();
-                        })
+                    return retryRunner(
+                        openai.beta.chat.completions[fKey].bind(
+                            openai.beta.chat.completions
+                        ),
+                        runOpts,
+                        evaluation
                     );
-
-                    const deltas = fromEvent(
-                        runner,
-                        "content",
-                        (delta, snapshot) => ({
-                            delta,
-                            snapshot,
-                        })
-                    )
-                        .pipe(
-                            withLatestFrom(state.$),
-                            concatMap(async ([data, state]) => {
-                                const latest = await state.getLatest();
-                                return latest.patch({
-                                    ...state.data,
-                                    data,
-                                });
-                            }),
-                            takeUntil(end$)
-                        )
-                        .subscribe();
-
-                    // console.log("send messages!?!?!??!", messages);
-                    return from(
-                        runner
-                            .finalMessage()
-                            .then(() => runner.messages.slice(_messages.length))
-                    );
-                }
+                },
+                50
             ),
             catchError((e) => {
                 console.log("error", e);
-                return EMPTY;
-            }),
-            map((messages) =>
-                messages.map((data) => ({ type: "message", data }))
-            )
+                return null;
+            })
         );
     };
 };

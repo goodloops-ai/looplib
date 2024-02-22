@@ -23,10 +23,13 @@ async function startDenoRepl(evalFilePath, historyFilePath) {
     // Start the Deno REPL as a subprocess with inherited stdio
     const p = Deno.run({
         cmd: ["deno", ...args],
-        stdin: "inherit",
+        stdin: "piped",
         stdout: "inherit",
         stderr: "inherit",
     });
+
+    // Pipe the parent's stdin to the child's stdin
+    await Deno.copy(Deno.stdin, p.stdin);
 
     // Wait for the subprocess to finish
     const status = await p.status();
