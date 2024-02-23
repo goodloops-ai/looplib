@@ -16,6 +16,12 @@
         "fast-equals": "^2.0.3",
         "zod": "^3.11.6",
         "uuid": "^8.3.2",
-        "openai": "4.20.1"
+        "openai": "4.26.1",
+        "zod-to-json-schema": "^1.0.0",
+        "@luismayo/schinquirer": "^1.0.0",
+        "filenamify": "^4.3.0",
+        "@dagrejs/graphlib": "^2.1.8",
+        "is-pojo": "^1.0.2",
+        "graphlib": "^2.1.8"
     }
 }
