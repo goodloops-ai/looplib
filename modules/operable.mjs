@@ -516,11 +516,14 @@ export class Trigger {
         this.sub = this.triggers
             .pipe(
                 tap((trigger) => {
+                    console.log("SET NODE", trigger.id, trigger.payload);
                     this.graph.setNode(trigger.id, trigger);
+                    console.log("NODE SET", this.graph.node(trigger.id));
                 }),
                 mergeMap((trigger) =>
                     trigger.to$.pipe(
                         scan((last, next) => {
+                            console.log("SCAN", trigger.id);
                             const toAdd = next.filter((t) => !last.includes(t));
                             const toRemove = last.filter(
                                 (t) => !next.includes(t)
@@ -534,6 +537,7 @@ export class Trigger {
                                 this.graph.removeEdge(trigger.id, t.id);
                             });
 
+                            console.log("SCAN END", trigger.id);
                             return next;
                         }, [])
                     )
