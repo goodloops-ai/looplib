@@ -35,7 +35,6 @@ import {
 
 import { Graph, alg } from "@dagrejs/graphlib";
 import { v4 as uuid } from "uuid";
-import { z } from "zod";
 import isPojo from "is-pojo";
 
 export class ConfigurableOperator {
@@ -437,7 +436,7 @@ function isZodSchema(operableCore) {
 }
 
 function isOperable(operableCore) {
-    return operableCore instanceof Operable;
+    return operableCore.__isOperable;
 }
 
 function toTriggers(operable, ...fromTriggers) {
@@ -466,6 +465,10 @@ function toTriggers(operable, ...fromTriggers) {
                 ),
                 unlockTrigger(operable, ...fromTriggers)
             );
+        }),
+        catchError((e) => {
+            console.error("FAILED TO CREATE TRIGGER", e);
+            return EMPTY;
         })
     );
 }
@@ -549,7 +552,6 @@ export class Trigger {
 
     constructor(payload, operable, ...from) {
         this.id = uuid(); // unique identifier flag
-        if (Array.is) this.payload = payload;
         this.operable = operable;
         this.payload = payload;
         addToBehaviorSubject(this.from$, ...from);
