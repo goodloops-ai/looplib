@@ -556,13 +556,13 @@ export class Trigger {
         this.operable = operable;
         this.payload = payload;
         addToBehaviorSubject(this.from$, ...from);
+        Trigger.triggers.next(this);
         from.forEach((trigger) => addToBehaviorSubject(trigger.to$, this));
 
         if (!Trigger.toGraphStarted) {
             Trigger.toGraph();
         }
 
-        Trigger.triggers.next(this);
         console.log(
             "TRIGGER",
             this.id,
