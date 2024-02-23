@@ -551,6 +551,7 @@ export class Trigger {
     states$ = new BehaviorSubject([]);
 
     constructor(payload, operable, ...from) {
+        console.log("NEW TRIGGER", payload, from.length);
         this.id = uuid(); // unique identifier flag
         this.operable = operable;
         this.payload = payload;
@@ -562,6 +563,12 @@ export class Trigger {
         }
 
         Trigger.triggers.next(this);
+        console.log(
+            "TRIGGER",
+            this.id,
+            "CREATED",
+            this.from$.getValue().length
+        );
     }
 
     get previous() {
