@@ -33,7 +33,7 @@ import {
     catchError,
 } from "rxjs";
 
-import { Graph, alg } from "graphlib";
+import { Graph, alg } from "@dagrejs/graphlib";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import isPojo from "is-pojo";

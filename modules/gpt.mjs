@@ -163,7 +163,7 @@ export const callGPT = (options) => {
                   openai.beta.chat.completions
               );
 
-        // console.log("RUNOPTS", runOpts);
+        console.log("RUNOPTS", runOpts);
         return range(1, options.n).pipe(
             makeCall(runFn, runOpts, trigger),
             take(options.n),
@@ -192,7 +192,10 @@ const makeCall = (fn, runOpts, trigger) => {
 
         const end$ = fromEvent(runner, "end").pipe(map(() => runner));
 
-        const error$ = fromEvent(runner, "error").pipe(ignoreElements());
+        const error$ = fromEvent(runner, "error").pipe(
+            tap((e) => console.error(e)),
+            ignoreElements()
+        );
         const abort$ = fromEvent(runner, "abort").pipe(ignoreElements());
 
         if (idx === 1) {
