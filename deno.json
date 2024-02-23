@@ -12,6 +12,8 @@
         "looplib/": "./",
         "schinquirer": "https://esm.sh/@luismayo/schinquirer",
         "filenamify": "https://esm.sh/filenamify",
+        "graphlib": "https://esm.sh/@dagrejs/graphlib",
+        "is-pojo": "https://esm.sh/is-pojo",
         "@dagrejs/graphlib": "https://esm.sh/@dagrejs/graphlib"
     }
 }

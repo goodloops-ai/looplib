@@ -117,9 +117,6 @@ export class Operable {
     }
 
     makeOutput$(operableCore) {
-        if (Deno.env.get("DEBUG")) {
-            console.log("MAKE OUTPUT", this.id, operableCore);
-        }
         let trigger$ = null;
         if (isOperator(operableCore)) {
             // console.log("OPERATOR");
@@ -505,25 +502,64 @@ function unlockTrigger(operable, ...from) {
 }
 
 export class Trigger {
+    static graph = new Graph();
+    static graph$ = new BehaviorSubject(this.graph);
+    static triggers = new Subject();
+    static toGraphStarted = false;
+
+    static toGraph() {
+        this.toGraphStarted = true;
+
+        this.sub = this.triggers
+            .pipe(
+                tap((trigger) => {
+                    this.graph.setNode(trigger.id, trigger);
+                }),
+                mergeMap((trigger) =>
+                    trigger.to$.pipe(
+                        scan((last, next) => {
+                            const toAdd = next.filter((t) => !last.includes(t));
+                            const toRemove = last.filter(
+                                (t) => !next.includes(t)
+                            );
+
+                            toAdd.forEach((t) => {
+                                this.graph.setEdge(trigger.id, t.id);
+                            });
+
+                            toRemove.forEach((t) => {
+                                this.graph.removeEdge(trigger.id, t.id);
+                            });
+
+                            return next;
+                        }, [])
+                    )
+                )
+            )
+            .subscribe(this.graph$);
+    }
+
     _previous = null;
     checkedPrevious = false;
 
     locks$ = new BehaviorSubject([]);
-    from$ = new BehaviorSubject([]);
-    fromDag$ = new BehaviorSubject([]); // BehaviorSubject for the DAG
-    toDag$ = new BehaviorSubject([]); // BehaviorSubject for the DAG
     to$ = new BehaviorSubject([]);
+    from$ = new BehaviorSubject([]);
     states$ = new BehaviorSubject([]);
 
     constructor(payload, operable, ...from) {
         this.id = uuid(); // unique identifier flag
         if (Array.is) this.payload = payload;
         this.operable = operable;
-        createGraph(this, "from$").subscribe(this.fromDag$);
-        createGraph(this, "to$").subscribe(this.toDag$);
         this.payload = payload;
         addToBehaviorSubject(this.from$, ...from);
         from.forEach((trigger) => addToBehaviorSubject(trigger.to$, this));
+
+        if (!Trigger.toGraphStarted) {
+            Trigger.toGraph();
+        }
+
+        Trigger.triggers.next(this);
     }
 
     get previous() {
@@ -535,11 +571,15 @@ export class Trigger {
         this._previous = value;
     }
 
+    get fromDag() {
+        return getPartialDag(this, true);
+    }
+
     findOne(query) {
         return this.find(query)[0];
     }
 
-    find(query, graph = this.fromDag$.getValue()) {
+    find(query, graph = this.fromDag) {
         if (isPureFunction(query)) {
             const _query = query;
             query = (node) => _query(node.payload);
@@ -551,8 +591,8 @@ export class Trigger {
         return this.findTriggers(query, graph).map((node) => node.payload);
     }
 
-    findTriggers(query, graph = this.fromDag$.getValue()) {
-        const topoSort = alg.topsort(graph);
+    findTriggers(query, graph = this.fromDag) {
+        const topoSort = alg.topsort(graph).reverse();
         let result = [];
 
         // console.log("QUERY", query);
@@ -584,14 +624,16 @@ export class Trigger {
         return result;
     }
 
-    sorted(graph = this.fromDag$.getValue()) {
+    sorted(graph = this.fromDag) {
         return alg
             .postorder(graph, graph.nodes())
             .map((nodeId) => graph.node(nodeId));
     }
+
     exhaust$(operables, cancel$ = EMPTY) {
-        return this.toDag$.pipe(
+        return Trigger.graph$.pipe(
             debounceTime(1000),
+            map(() => getPartialDag(this)),
             switchMap((graph) => {
                 const triggers = alg
                     .postorder(graph, graph.nodes())
@@ -634,7 +676,8 @@ export class Trigger {
     }
 
     toJson$() {
-        return this.toDag$.pipe(
+        return Trigger.graph$.pipe(
+            map(() => getPartialDag(this)),
             map((graph) => {
                 return JSON.stringify(
                     alg
@@ -690,6 +733,44 @@ export class Trigger {
     }
 
     static fromJson(json) {}
+}
+
+function getPartialDag(trigger, reverse = false) {
+    const graph = new Graph();
+    const globalGraph = Trigger.graph;
+
+    const fn = reverse
+        ? globalGraph.predecessors.bind(globalGraph)
+        : globalGraph.successors.bind(globalGraph);
+    const seen = new Set([trigger.id]);
+    graph.setNode(trigger.id, trigger);
+    let next = [];
+
+    do {
+        const _next = fn(trigger.id) || [];
+        next = Array.from(new Set(next.concat(_next))).filter(
+            (id) => !seen.has(id)
+        );
+
+        next.forEach((id) => {
+            // console.log("next", id, globalGraph.node(id));
+            const node = globalGraph.node(id);
+            graph.setNode(node.id, node);
+            if (reverse) {
+                graph.setEdge(node.id, trigger.id);
+            } else {
+                graph.setEdge(trigger.id, node.id);
+            }
+        });
+
+        if (next.length === 0) {
+            break;
+        }
+        trigger = globalGraph.node(next[0]);
+        seen.add(trigger.id);
+    } while (true);
+
+    return graph;
 }
 
 export function createGraph(node, $key, reverse = false, visited = new Set()) {
