@@ -286,18 +286,18 @@ export function operableCombine(
                             : of(joiningTrigger)
                     ),
                     distinct(({ id }) => id),
-                    tap((trigger) =>
-                        console.log("got joining trigger", trigger.id)
-                    ),
+                    // tap((trigger) =>
+                    //     console.log("got joining trigger", trigger.id)
+                    // ),
                     mergeMap((joiningTrigger) => {
                         return joiningTrigger.exhaust$(operables, cancel$);
                     }),
-                    tap((triggers) => {
-                        console.log(
-                            "got exhaust triggers",
-                            triggers.map((t) => t.id)
-                        );
-                    }),
+                    // tap((triggers) => {
+                    //     console.log(
+                    //         "got exhaust triggers",
+                    //         triggers.map((t) => t.id)
+                    //     );
+                    // }),
                     switchMap((triggers) => {
                         const notFound = operables.filter(
                             (operable) =>
@@ -516,14 +516,14 @@ export class Trigger {
         this.sub = this.triggers
             .pipe(
                 tap((trigger) => {
-                    console.log("SET NODE", trigger.id, trigger.payload);
+                    // console.log("SET NODE", trigger.id, trigger.payload);
                     this.graph.setNode(trigger.id, trigger);
-                    console.log("NODE SET", this.graph.node(trigger.id));
+                    // console.log("NODE SET", this.graph.node(trigger.id));
                 }),
                 mergeMap((trigger) =>
                     trigger.to$.pipe(
                         scan((last, next) => {
-                            console.log("SCAN", trigger.id);
+                            // console.log("SCAN", trigger.id);
                             const toAdd = next.filter((t) => !last.includes(t));
                             const toRemove = last.filter(
                                 (t) => !next.includes(t)
@@ -537,7 +537,7 @@ export class Trigger {
                                 this.graph.removeEdge(trigger.id, t.id);
                             });
 
-                            console.log("SCAN END", trigger.id);
+                            // console.log("SCAN END", trigger.id);
                             return next;
                         }, [])
                     )
@@ -555,7 +555,7 @@ export class Trigger {
     states$ = new BehaviorSubject([]);
 
     constructor(payload, operable, ...from) {
-        console.log("NEW TRIGGER", payload, from.length);
+        // console.log("NEW TRIGGER", payload, from.length);
         this.id = uuid(); // unique identifier flag
         this.operable = operable;
         this.payload = payload;
@@ -567,12 +567,12 @@ export class Trigger {
             Trigger.toGraph();
         }
 
-        console.log(
-            "TRIGGER",
-            this.id,
-            "CREATED",
-            this.from$.getValue().length
-        );
+        // console.log(
+        //     "TRIGGER",
+        //     this.id,
+        //     "CREATED",
+        //     this.from$.getValue().length
+        // );
     }
 
     get previous() {

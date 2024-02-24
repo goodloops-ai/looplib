@@ -163,7 +163,7 @@ export const callGPT = (options) => {
                   openai.beta.chat.completions
               );
 
-        console.log("RUNOPTS", runOpts);
+        // console.log("RUNOPTS", runOpts);
         return range(1, options.n).pipe(
             makeCall(runFn, runOpts, trigger),
             take(options.n),
@@ -270,16 +270,16 @@ export function ask(question) {
 }
 
 export function guard(askNode, yes = true) {
-    console.log("GUARD", askNode.id, yes);
+    // console.log("GUARD", askNode.id, yes);
     return pipe(
         map((trigger) => {
-            console.log("GUARD", askNode.id, trigger.operable.id, yes);
+            // console.log("GUARD", askNode.id, trigger.operable.id, yes);
             const context = trigger.payload;
-            console.log("CONTEXT", context);
+            // console.log("CONTEXT", context);
             const { answer } = JSON.parse(
                 context.messages.find(({ role }) => role === "tool").content
             );
-            console.log("GUARD", askNode.id, trigger.operable.id, yes, answer);
+            // console.log("GUARD", askNode.id, trigger.operable.id, yes, answer);
 
             return yes ? answer : !answer;
         })
