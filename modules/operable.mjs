@@ -82,6 +82,8 @@ export class Operable {
         } else {
             this.input$.next(new Trigger(triggerOrPayload));
         }
+
+        return null;
     }
 
     withCachedOutput(pipeline) {
@@ -118,11 +120,13 @@ export class Operable {
     makeOutput$(operableCore) {
         let trigger$ = null;
         if (isOperator(operableCore)) {
+            operableCore = operableCore.bind(this);
             // console.log("OPERATOR");
             trigger$ = this.withCachedOutput(
                 withTriggerGraph(this, operableCore)
             );
         } else if (isAsyncGenerator(operableCore)) {
+            operableCore = operableCore.bind(this);
             // console.log("ASYNC GENERATOR");
             let generator = operableCore();
             generator.next();
@@ -136,6 +140,7 @@ export class Operable {
                 )
             );
         } else if (isPureFunction(operableCore)) {
+            operableCore = operableCore.bind(this);
             trigger$ = this.withCachedOutput(
                 withTriggerGraph(
                     this,
@@ -412,11 +417,12 @@ function isOperator(operableCore) {
     );
 }
 
+function isRegex(operableCore) {
+    return operableCore instanceof RegExp;
+}
+
 function isPureFunction(operableCore) {
-    return (
-        typeof operableCore === "function" &&
-        (!operableCore.prototype || !operableCore.prototype.constructor.name)
-    );
+    return typeof operableCore === "function";
 }
 
 function isAsyncGenerator(operableCore) {
@@ -432,7 +438,7 @@ function isTrigger(trigger) {
 }
 
 function isZodSchema(operableCore) {
-    return !!operableCore.safeParse;
+    return !!operableCore?.safeParse;
 }
 
 function isOperable(operableCore) {
@@ -592,16 +598,55 @@ export class Trigger {
         return this.find(query)[0];
     }
 
+    get(query) {
+        let result = null;
+
+        if (isPureFunction(query)) {
+            result = query(this.payload);
+        } else if (isZodSchema(query)) {
+            const res = query.safeParse(this.payload);
+            result = res.success ? res.data : null;
+        } else if (isRegex(query)) {
+            // console.log("REGEX", query);
+            const traverseAndMatch = (obj) => {
+                let found = null;
+                for (const key in obj) {
+                    if (typeof obj[key] === "string" && query.test(obj[key])) {
+                        found = obj[key].match(query)[1];
+                        break;
+                    } else if (
+                        obj[key] !== null &&
+                        typeof obj[key] === "object"
+                    ) {
+                        found = traverseAndMatch(obj[key]);
+                        if (found) break;
+                    }
+                }
+                return found;
+            };
+            result = traverseAndMatch(this.payload);
+        }
+
+        return result;
+    }
+
     find(query, graph = this.fromDag) {
+        let schema = null;
         if (isPureFunction(query)) {
             const _query = query;
             query = (node) => _query(node.payload);
         } else if (isZodSchema(query)) {
-            const schema = query;
+            schema = query;
             query = (node) => schema.safeParse(node.payload).success;
         }
 
-        return this.findTriggers(query, graph).map((node) => node.payload);
+        return this.findTriggers(query, graph).map((node) => {
+            if (schema) {
+                return schema.safeParse(node.payload).data;
+            }
+
+            return node.payload;
+        });
     }
 
     findTriggers(query, graph = this.fromDag) {
