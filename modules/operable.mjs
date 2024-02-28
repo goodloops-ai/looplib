@@ -78,6 +78,7 @@ export class Operable {
 
     next(triggerOrPayload) {
         if (isTrigger(triggerOrPayload)) {
+            // console.log("NEXT isTrigger", triggerOrPayload.id);
             this.input$.next(triggerOrPayload);
         } else {
             this.input$.next(new Trigger(triggerOrPayload));
@@ -226,7 +227,7 @@ export class Operable {
         return this;
     }
 
-    flow(fn, fromParentTrigger) {
+    flow(fn, fromParentTrigger = true) {
         const operables = fn(this);
         return operableCombine(operables, this, fromParentTrigger);
     }
@@ -562,16 +563,16 @@ export class Trigger {
 
     constructor(payload, operable, ...from) {
         // console.log("NEW TRIGGER", payload, from.length);
-        this.id = uuid(); // unique identifier flag
-        this.operable = operable;
-        this.payload = payload;
-        addToBehaviorSubject(this.from$, ...from);
-        Trigger.triggers.next(this);
-        from.forEach((trigger) => addToBehaviorSubject(trigger.to$, this));
 
         if (!Trigger.toGraphStarted) {
             Trigger.toGraph();
         }
+        this.id = uuid(); // unique identifier flag
+        this.operable = operable;
+        this.payload = payload;
+        Trigger.triggers.next(this);
+        addToBehaviorSubject(this.from$, ...from);
+        from.forEach((trigger) => addToBehaviorSubject(trigger.to$, this));
 
         // console.log(
         //     "TRIGGER",
@@ -638,6 +639,8 @@ export class Trigger {
         } else if (isZodSchema(query)) {
             schema = query;
             query = (node) => schema.safeParse(node.payload).success;
+        } else if (!query) {
+            query = (node) => true;
         }
 
         return this.findTriggers(query, graph).map((node) => {
@@ -697,7 +700,6 @@ export class Trigger {
                     .postorder(graph, graph.nodes())
                     .map((nodeId) => graph.node(nodeId));
 
-                // return of(triggers.slice(0, 1));
                 const toJoin = triggers.map((trigger) =>
                     trigger.locks$.pipe(
                         filter((locks) => locks.length === 0),
@@ -706,7 +708,6 @@ export class Trigger {
                     )
                 );
 
-                const nonce = Math.random();
                 return forkJoin(toJoin).pipe(
                     map(() =>
                         triggers.filter((trigger) =>

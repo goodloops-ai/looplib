@@ -15,6 +15,7 @@ import {
     tap,
 } from "rxjs";
 import { addToBehaviorSubject, operableFrom } from "./operable.mjs";
+import YAML from "yaml";
 
 try {
     const { load } = await import(
@@ -218,7 +219,7 @@ const makeCall = (fn, runOpts, trigger) => {
 const promptSchema = callSchema.extend({
     prompt: z.string(),
     role: z.enum(["user", "assistant", "system"]).default("user"),
-    context: z.enum(["complete", "partial"]).default("partial"),
+    context: z.enum(["complete", "partial"]).default("complete"),
 });
 
 export const promptGPT = (options) => {
@@ -233,7 +234,20 @@ export const promptGPT = (options) => {
             // console.log("prompt");
             let messages =
                 options.context === "complete"
-                    ? trigger.findOne(completeContextSchema)?.messages || []
+                    ? trigger
+                          .find()
+                          .map((data) => {
+                              if (data.messages) return data.messages;
+                              if (!data || data === true || data?.hidden)
+                                  return [];
+
+                              return {
+                                  role: "user",
+                                  content: YAML.stringify(data, null, 2),
+                              };
+                          })
+                          .reverse()
+                          .flat()
                     : trigger
                           .find(partialContextSchema)
                           .map(({ messages }) => messages)
@@ -241,6 +255,7 @@ export const promptGPT = (options) => {
                           .flat();
 
             messages = messages.concat([thisMsg]);
+            console.log("PROMPT", JSON.stringify(messages, null, 2));
 
             return { trigger, messages };
         }),
