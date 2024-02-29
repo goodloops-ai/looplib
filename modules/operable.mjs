@@ -610,20 +610,24 @@ export class Trigger {
         } else if (isRegex(query)) {
             // console.log("REGEX", query);
             const traverseAndMatch = (obj) => {
-                let found = null;
-                for (const key in obj) {
-                    if (typeof obj[key] === "string" && query.test(obj[key])) {
-                        found = obj[key].match(query)[1];
-                        break;
-                    } else if (
-                        obj[key] !== null &&
-                        typeof obj[key] === "object"
-                    ) {
-                        found = traverseAndMatch(obj[key]);
-                        if (found) break;
+                const matches = [];
+                const traverse = (subObj) => {
+                    for (const key in subObj) {
+                        if (
+                            typeof subObj[key] === "string" &&
+                            query.test(subObj[key])
+                        ) {
+                            matches.push(subObj[key].match(query)[1]);
+                        } else if (
+                            subObj[key] !== null &&
+                            typeof subObj[key] === "object"
+                        ) {
+                            traverse(subObj[key]);
+                        }
                     }
-                }
-                return found;
+                };
+                traverse(obj);
+                return matches.length > 0 ? matches.pop() : null;
             };
             result = traverseAndMatch(this.payload);
         }

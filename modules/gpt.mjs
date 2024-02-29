@@ -101,9 +101,10 @@ const callSchema = z.object({
     temperature: z.number().default(0.3),
     n: z.number().default(1),
     branch: z.boolean().default(false),
-    concurrency: z.number().default(10),
+    concurrency: z.number().default(100),
     maxRetries: z.number().default(10),
     timeout: z.number().default(120 * 1000),
+    max_tokens: z.number().default(4000),
     tools: z
         .array(
             z.object({
@@ -143,6 +144,7 @@ export const callGPT = (options) => {
             messages,
             model: options.model,
             temperature: options.temperature,
+            max_tokens: options.max_tokens,
             ...(tools.length ? { tools } : {}),
             ...(tools.length === 1 && tools[0].force
                 ? {
@@ -220,6 +222,7 @@ const promptSchema = callSchema.extend({
     prompt: z.string(),
     role: z.enum(["user", "assistant", "system"]).default("user"),
     context: z.enum(["complete", "partial"]).default("complete"),
+    reducer: z.boolean().default(false),
 });
 
 export const promptGPT = (options) => {
@@ -254,7 +257,30 @@ export const promptGPT = (options) => {
                           .reverse()
                           .flat();
 
+            if (options.reducer) {
+                if (trigger.previous) {
+                    const previousMessage =
+                        trigger.previous[0].messages[
+                            trigger.previous[0].messages?.length - 1
+                        ];
+
+                    const summary = {
+                        role: "user",
+                        content: `Here is your previous response:
+
+\`\`\`markdown
+${previousMessage.content}
+\`\`\`
+
+Augment this response.`,
+                    };
+
+                    messages = messages.concat([summary]);
+                }
+            }
+
             messages = messages.concat([thisMsg]);
+
             console.log("PROMPT", JSON.stringify(messages, null, 2));
 
             return { trigger, messages };
