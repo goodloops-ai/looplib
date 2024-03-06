@@ -125,68 +125,82 @@ const callSchema = z.object({
 
 export const callGPT = (options) => {
     options = callSchema.parse(options);
+    const useTogether = !options.model.includes("gpt");
 
-    return mergeMap(({ trigger, messages }) => {
-        const openai = new OpenAI({
-            dangerouslyAllowBrowser: true,
-            apiKey: options.apiKey,
-            maxRetries: options.maxRetries,
-            timeout: options.timeout,
-        });
+    return mergeMap(
+        ({ trigger, messages }) => {
+            const openai = new OpenAI({
+                dangerouslyAllowBrowser: true,
+                apiKey: options.apiKey,
+                maxRetries: options.maxRetries,
+                timeout: options.timeout,
+                ...(useTogether
+                    ? {
+                          baseURL: "https://api.together.xyz/v1",
+                          apiKey: Deno.env.get("TOGETHER_API_KEY"),
+                      }
+                    : {}),
+            });
 
-        const tools = options.tools.map(({ fn }) => ({
-            type: "function",
-            function: fn,
-        }));
+            const tools = options.tools.map(({ fn }) => ({
+                type: "function",
+                function: fn,
+            }));
 
-        const runOpts = {
-            stream: true,
-            messages,
-            model: options.model,
-            temperature: options.temperature,
-            max_tokens: options.max_tokens,
-            ...(tools.length ? { tools } : {}),
-            ...(tools.length === 1 && tools[0].force
-                ? {
-                      tool_choice: {
-                          type: "function",
-                          function: {
-                              name: tools[0].fn.name,
+            const runOpts = {
+                stream: true,
+                messages,
+                model: options.model,
+                temperature: options.temperature,
+                max_tokens: options.max_tokens,
+                ...(tools.length ? { tools } : {}),
+                ...(tools.length === 1 && tools[0].force
+                    ? {
+                          tool_choice: {
+                              type: "function",
+                              function: {
+                                  name: tools[0].fn.name,
+                              },
                           },
-                      },
-                  }
-                : {}),
-        };
+                      }
+                    : {}),
+            };
 
-        const runFn = tools.length
-            ? openai.beta.chat.completions.runTools.bind(
-                  openai.beta.chat.completions
-              )
-            : openai.beta.chat.completions.stream.bind(
-                  openai.beta.chat.completions
-              );
+            const runFn = tools.length
+                ? openai.beta.chat.completions.runTools.bind(
+                      openai.beta.chat.completions
+                  )
+                : openai.beta.chat.completions.stream.bind(
+                      openai.beta.chat.completions
+                  );
 
-        // console.log("RUNOPTS", runOpts);
-        return range(1, options.n).pipe(
-            makeCall(runFn, runOpts, trigger),
-            take(options.n),
-            toArray(),
-            map((runners) => {
-                if (options.branch) {
-                    return runners.map((runner, idx) => {
-                        const response = runner.messages.slice(messages.length);
-                        return { response };
-                    });
-                } else {
-                    const response = runners
-                        .map((runner) => runner.messages.slice(messages.length))
-                        .flat();
+            // console.log("RUNOPTS", runOpts);
+            return range(1, options.n).pipe(
+                makeCall(runFn, runOpts, trigger),
+                take(options.n),
+                toArray(),
+                map((runners) => {
+                    if (options.branch) {
+                        return runners.map((runner, idx) => {
+                            const response = runner.messages.slice(
+                                messages.length
+                            );
+                            return { response };
+                        });
+                    } else {
+                        const response = runners
+                            .map((runner) =>
+                                runner.messages.slice(messages.length)
+                            )
+                            .flat();
 
-                    return [{ response }];
-                }
-            })
-        );
-    }, options.concurrency);
+                        return [{ response }];
+                    }
+                })
+            );
+        },
+        useTogether ? 1 : options.concurrency
+    );
 };
 
 const makeCall = (fn, runOpts, trigger) => {
@@ -196,7 +210,7 @@ const makeCall = (fn, runOpts, trigger) => {
         const end$ = fromEvent(runner, "end").pipe(map(() => runner));
 
         const error$ = fromEvent(runner, "error").pipe(
-            tap((e) => console.error(e)),
+            tap((e) => console.error("GPT ERROR", e)),
             ignoreElements()
         );
         const abort$ = fromEvent(runner, "abort").pipe(ignoreElements());
@@ -220,6 +234,7 @@ const makeCall = (fn, runOpts, trigger) => {
 
 const promptSchema = callSchema.extend({
     prompt: z.string(),
+    system: z.string().optional(),
     role: z.enum(["user", "assistant", "system"]).default("user"),
     context: z.enum(["complete", "partial"]).default("complete"),
     reducer: z.boolean().default(false),
@@ -231,6 +246,10 @@ export const promptGPT = (options) => {
         role: options.role,
         content: options.prompt,
     };
+
+    let systemMessage = options.system
+        ? { role: "system", content: options.system }
+        : null;
 
     return pipe(
         map((trigger) => {
@@ -244,6 +263,7 @@ export const promptGPT = (options) => {
                               if (!data || data === true || data?.hidden)
                                   return [];
 
+                              console.log("YAML", data.toString(), data);
                               return {
                                   role: "user",
                                   content: YAML.stringify(data, null, 2),
@@ -280,6 +300,10 @@ Augment this response.`,
             }
 
             messages = messages.concat([thisMsg]);
+
+            if (systemMessage) {
+                messages = [systemMessage].concat(messages);
+            }
 
             console.log("PROMPT", JSON.stringify(messages, null, 2));
 
