@@ -295,14 +295,30 @@ export const promptGPT = (options) => {
 
     return pipe(
         map((trigger) => {
-            // console.log("prompt");
+            if (trigger.payload.retry) {
+                const last = trigger
+                    .findTriggers(z.object({ payload: partialContextSchema }))
+                    .find(({ payload: data }) => {
+                        // console.log("FIND LAST", data, thisMsg.content);
+                        return data.messages.some(({ role, content }) => {
+                            return content === thisMsg.content;
+                        });
+                    });
+
+                if (!last) {
+                    throw new Error("No last message found");
+                }
+
+                last.payload.hidden = true;
+            }
+
             let blind;
             let messages =
                 options.context === "complete"
                     ? trigger
                           .find()
                           .filter((data) => {
-                              console.log("DATA", data, data.type, blind);
+                              //   console.log("DATA", data, data.type, blind);
                               if (blind) return false;
 
                               if (data.type === "blind") {
@@ -313,11 +329,11 @@ export const promptGPT = (options) => {
                               return true;
                           })
                           .map((data) => {
-                              if (data.messages) return data.messages;
                               if (!data || data === true || data?.hidden)
                                   return [];
+                              if (data.messages) return data.messages;
 
-                              console.log("YAML", data.toString(), data);
+                              //   console.log("YAML", data.toString(), data);
                               return {
                                   role: "user",
                                   content: YAML.stringify(data, null, 2),
