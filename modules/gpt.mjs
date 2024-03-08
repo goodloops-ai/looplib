@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { OpenAI } from "openai";
+import { OpenAI } from "../../openai-node/deno/mod.ts";
+import { getChatGPTEncoding } from "./tokens.mjs";
 import {
     map,
     fromEvent,
@@ -126,9 +127,18 @@ const callSchema = z.object({
 export const callGPT = (options) => {
     options = callSchema.parse(options);
     const useTogether = !options.model.includes("gpt");
+    const tokenModel = useTogether ? "gpt-4" : options.model;
 
+    const tokens = {
+        model: tokenModel,
+        request: 0,
+        response: 0,
+    };
     return mergeMap(
         ({ trigger, messages }) => {
+            tokens.request = getChatGPTEncoding(messages, tokenModel);
+            const requestIndex = messages.length;
+
             const openai = new OpenAI({
                 dangerouslyAllowBrowser: true,
                 apiKey: options.apiKey,
@@ -185,7 +195,18 @@ export const callGPT = (options) => {
                             const response = runner.messages.slice(
                                 messages.length
                             );
-                            return { response };
+                            const responseTokens = getChatGPTEncoding(
+                                response,
+                                tokenModel
+                            );
+
+                            return {
+                                response,
+                                tokens: {
+                                    ...tokens,
+                                    response: responseTokens,
+                                },
+                            };
                         });
                     } else {
                         const response = runners
@@ -194,7 +215,12 @@ export const callGPT = (options) => {
                             )
                             .flat();
 
-                        return [{ response }];
+                        tokens.response = getChatGPTEncoding(
+                            response,
+                            tokenModel
+                        );
+
+                        return [{ response, tokens }];
                     }
                 })
             );
@@ -254,10 +280,22 @@ export const promptGPT = (options) => {
     return pipe(
         map((trigger) => {
             // console.log("prompt");
+            let blind;
             let messages =
                 options.context === "complete"
                     ? trigger
                           .find()
+                          .filter((data) => {
+                              console.log("DATA", data, data.type, blind);
+                              if (blind) return false;
+
+                              if (data.type === "blind") {
+                                  blind = true;
+                                  return true;
+                              }
+
+                              return true;
+                          })
                           .map((data) => {
                               if (data.messages) return data.messages;
                               if (!data || data === true || data?.hidden)
@@ -311,9 +349,10 @@ Augment this response.`,
         }),
         callGPT(options),
         map((responses) =>
-            responses.map(({ response }) => ({
+            responses.map(({ response, tokens }) => ({
                 type: "partial",
                 messages: [thisMsg].concat(response),
+                tokens,
             }))
         )
     );
