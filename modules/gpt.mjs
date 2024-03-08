@@ -18,24 +18,29 @@ import { addToBehaviorSubject, operableFrom } from "./operable.mjs";
 import YAML from "yaml";
 
 let OpenAI;
-try {
-    const { load } = await import(
-        "https://deno.land/std@0.214.0/dotenv/mod.ts"
-    );
-    await load({ export: true });
+
+if (self.Deno) {
     OpenAI = (
         await import(
             "https://raw.githubusercontent.com/goodloops-ai/openai-node/together-4.28.4/deno/mod.ts"
         )
     ).OpenAI;
-    console.log("loaded .env", window.Deno?.env?.get?.("OPENAI_API_KEY"));
-} catch (e) {
+} else {
     OpenAI = (
         await import(
             "https://esm.sh/gh/goodloops-ai/openai-node@c35c92f32328586bc4c46adeaaee8b34aa2573b6"
         )
     ).OpenAI;
 }
+
+try {
+    const { load } = await import(
+        "https://deno.land/std@0.214.0/dotenv/mod.ts"
+    );
+    await load({ export: true });
+
+    console.log("loaded .env", window.Deno?.env?.get?.("OPENAI_API_KEY"));
+} catch (e) {}
 
 export const OPENAI_API_KEY = "OPENAI_API_KEY";
 export const ENV = [OPENAI_API_KEY];
