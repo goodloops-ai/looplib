@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { OpenAI } from "../../openai-node/deno/mod.ts";
+import { OpenAI } from "openai";
 import { getChatGPTEncoding } from "./tokens.mjs";
 import {
     map,
