@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { OpenAI } from "openai";
+import { OpenAI } from "https://esm.sh/gh/goodloops-ai/openai-node@c35c92f32328586bc4c46adeaaee8b34aa2573b6";
 import { getChatGPTEncoding } from "./tokens.mjs";
 import {
     map,
