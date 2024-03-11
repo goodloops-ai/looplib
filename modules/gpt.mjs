@@ -16,6 +16,9 @@ import {
 } from "rxjs";
 import { addToBehaviorSubject, operableFrom } from "./operable.mjs";
 import YAML from "yaml";
+import { retryTo } from "./std.mjs";
+import { of } from "https://esm.sh/rxjs@7.8.1";
+import { delay } from "https://esm.sh/rxjs@7.8.1";
 
 let OpenAI;
 
@@ -144,7 +147,7 @@ export const callGPT = (options) => {
     options = callSchema.parse(options);
     const useTogether = !options.model.includes("gpt");
     const tokenModel = useTogether ? "gpt-4" : options.model;
-
+    // console.log("make call", options.maxRetries, options.timeout);
     const tokens = {
         model: tokenModel,
         request: 0,
@@ -200,9 +203,28 @@ export const callGPT = (options) => {
                       openai.beta.chat.completions
                   );
 
+            const makeCallWithRetry = (count) =>
+                of(1).pipe(
+                    makeCall(runFn, runOpts, trigger),
+                    mergeMap((runner) => {
+                        const response = runner.messages.slice(messages.length);
+                        if (!response.length) {
+                            console.log(
+                                "GPT GOT NO RESPONSE, RETRYING IN 10 SECONDS..."
+                            );
+                            return of(1).pipe(
+                                delay(10000),
+                                mergeMap(() => makeCallWithRetry(++count))
+                            );
+                        }
+
+                        return of(runner);
+                    })
+                );
+
             // console.log("RUNOPTS", runOpts);
             return range(1, options.n).pipe(
-                makeCall(runFn, runOpts, trigger),
+                mergeMap(() => makeCallWithRetry(0)),
                 take(options.n),
                 toArray(),
                 map((runners) => {
@@ -279,6 +301,8 @@ const promptSchema = callSchema.extend({
     system: z.string().optional(),
     role: z.enum(["user", "assistant", "system"]).default("user"),
     context: z.enum(["complete", "partial"]).default("complete"),
+    maxRetries: z.number().default(10),
+    timeout: z.number().default(120 * 1000),
     reducer: z.boolean().default(false),
 });
 
@@ -396,7 +420,11 @@ export function prompt(optionsOrPrompt) {
             ? { prompt: optionsOrPrompt }
             : optionsOrPrompt;
 
-    return operableFrom(promptGPT(options));
+    const try$ = operableFrom(promptGPT(options));
+    const recover$ = recoverNoAssistant(try$);
+    // try$.pipe(recover$);
+
+    return try$;
 }
 
 export function ask(question) {
@@ -420,4 +448,21 @@ export function guard(askNode, yes = true) {
             return yes ? answer : !answer;
         })
     );
+}
+
+function recoverNoAssistant(to$) {
+    return retryTo(Infinity, to$, async (trigger) => {
+        console.log("retryToAssistant", trigger.payload);
+        const { messages } = trigger.payload;
+        const last = messages[messages.length - 1];
+        const lastContent = last.content;
+        if (last.role !== "assistant" || !lastContent) {
+            console.log("GOT NO ASSISTANT MESSAGE, RETRYING in 10 seconds...");
+            await new Promise((resolve) => setTimeout(resolve, 10000));
+            console.log("EXECUTING RETRY");
+            return true;
+        }
+
+        return false;
+    });
 }

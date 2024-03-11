@@ -36,6 +36,7 @@ import {
 import { Graph, alg } from "@dagrejs/graphlib";
 import { v4 as uuid } from "uuid";
 import isPojo from "is-pojo";
+import { z } from "zod";
 
 export class ConfigurableOperator {
     constructor(operatorFactory, config) {
@@ -189,6 +190,7 @@ export class Operable {
         return trigger$.pipe(
             delay(0),
             catchError((e) => {
+                console.error("FAILED TO CREATE TRIGGER", e);
                 console.error(e);
                 return EMPTY;
             }),
@@ -197,6 +199,10 @@ export class Operable {
     }
 
     pipe(next, ...rest) {
+        if (Array.isArray(next)) {
+            return this.pipe(...next, ...rest);
+        }
+
         if (!next) {
             return this;
         }
@@ -599,13 +605,27 @@ export class Trigger {
         return this.find(query)[0];
     }
 
-    get(query) {
+    get(query, includeHidden = false) {
         let result = null;
+        // get the last payload object with hidden undefined or true
+        const hiddenQuery = includeHidden
+            ? z.union([z.literal(false), z.literal(true), z.literal(undefined)])
+            : z.union([z.literal(false), z.undefined()]);
+
+        const payload = this.findOne(
+            z
+                .object({
+                    hidden: hiddenQuery,
+                })
+                .passthrough()
+        );
+
+        console.log("GET PAYLOAD", payload);
 
         if (isPureFunction(query)) {
-            result = query(this.payload);
+            result = query(payload);
         } else if (isZodSchema(query)) {
-            const res = query.safeParse(this.payload);
+            const res = query.safeParse(payload);
             result = res.success ? res.data : null;
         } else if (isRegex(query)) {
             // console.log("REGEX", query);
@@ -625,7 +645,7 @@ export class Trigger {
                 }
                 return found;
             };
-            result = traverseAndMatch(this.payload);
+            result = traverseAndMatch(payload);
         }
 
         return result;
