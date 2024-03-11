@@ -156,7 +156,13 @@ export const callGPT = (options) => {
     return mergeMap(
         ({ trigger, messages }) => {
             tokens.request = getChatGPTEncoding(messages, tokenModel);
-            const requestIndex = messages.length;
+            if (tokens.request + options.max_tokens > options.maxContext) {
+                return {
+                    error: new Error(
+                        `(tokens.request + options.max_tokens > options.maxContext)`
+                    ),
+                };
+            }
 
             const openai = new OpenAI({
                 dangerouslyAllowBrowser: true,
@@ -203,28 +209,41 @@ export const callGPT = (options) => {
                       openai.beta.chat.completions
                   );
 
-            const makeCallWithRetry = (count) =>
+            const makeCallWithRetry = (count = 0) =>
                 of(1).pipe(
                     makeCall(runFn, runOpts, trigger),
                     mergeMap((runner) => {
-                        const response = runner.messages.slice(messages.length);
-                        if (!response.length) {
-                            console.log(
-                                "GPT GOT NO RESPONSE, RETRYING IN 10 SECONDS..."
-                            );
-                            return of(1).pipe(
-                                delay(10000),
-                                mergeMap(() => makeCallWithRetry(++count))
-                            );
+                        if (!runner.error || count >= options.maxRetries) {
+                            return of(runner);
                         }
 
-                        return of(runner);
+                        switch (runner.error.status) {
+                            case undefined:
+                            case 429:
+                            /* falls through */
+                            case 500:
+                            /* falls through */
+                            case 503:
+                                console.log(
+                                    "GPT GOT API ERROR, RETRYING IN 10 SECONDS..."
+                                );
+                                return of(1).pipe(
+                                    delay(10000),
+                                    mergeMap(() => makeCallWithRetry(++count))
+                                );
+                            default:
+                                console.log(
+                                    "GPT GOT ERROR, NOT RETRYING...",
+                                    runner.error
+                                );
+                                return of(runner);
+                        }
                     })
                 );
 
             // console.log("RUNOPTS", runOpts);
             return range(1, options.n).pipe(
-                mergeMap(() => makeCallWithRetry(0)),
+                mergeMap(() => makeCallWithRetry()),
                 take(options.n),
                 toArray(),
                 map((runners) => {
@@ -240,6 +259,7 @@ export const callGPT = (options) => {
 
                             return {
                                 response,
+                                error: runner.error,
                                 tokens: {
                                     ...tokens,
                                     response: responseTokens,
@@ -257,8 +277,10 @@ export const callGPT = (options) => {
                             response,
                             tokenModel
                         );
+                        console.log(runners);
+                        const error = runners.find(({ error }) => error)?.error;
 
-                        return [{ response, tokens }];
+                        return [{ response, tokens, error }];
                     }
                 })
             );
@@ -274,7 +296,7 @@ const makeCall = (fn, runOpts, trigger) => {
         const end$ = fromEvent(runner, "end").pipe(map(() => runner));
 
         const error$ = fromEvent(runner, "error").pipe(
-            tap((e) => console.error("GPT ERROR", e)),
+            tap((e) => (runner.error = e)),
             ignoreElements()
         );
         const abort$ = fromEvent(runner, "abort").pipe(ignoreElements());
@@ -303,6 +325,7 @@ const promptSchema = callSchema.extend({
     context: z.enum(["complete", "partial"]).default("complete"),
     maxRetries: z.number().default(10),
     timeout: z.number().default(120 * 1000),
+    maxContext: z.number().default(1024 * 128),
     reducer: z.boolean().default(false),
 });
 
@@ -405,9 +428,10 @@ Augment this response.`,
         }),
         callGPT(options),
         map((responses) =>
-            responses.map(({ response, tokens }) => ({
+            responses.map(({ response, tokens, error }) => ({
                 type: "partial",
                 messages: [thisMsg].concat(response),
+                error,
                 tokens,
             }))
         )
