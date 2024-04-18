@@ -146,7 +146,11 @@ const callSchema = z.object({
 export const callGPT = (options) => {
     options = callSchema.parse(options);
     const useTogether = !options.model.includes("gpt");
-    const tokenModel = useTogether ? "gpt-4" : options.model;
+    const tokenModel = useTogether
+        ? "gpt-4"
+        : options.model.startsWith("gpt-4")
+        ? "gpt-4"
+        : "gpt-3.5";
     // console.log("make call", options.maxRetries, options.timeout);
     const tokens = {
         model: tokenModel,
