@@ -261,11 +261,15 @@ export const callGPT = (options) => {
                                 tokenModel
                             );
 
+                            const history = runner.messages;
+
                             return {
                                 response,
                                 error: runner.error,
+                                history,
                                 tokens: {
                                     ...tokens,
+
                                     response: responseTokens,
                                 },
                             };
@@ -277,6 +281,10 @@ export const callGPT = (options) => {
                             )
                             .flat();
 
+                        const history = runners
+                            .map(({ messages }) => messages)
+                            .flat();
+
                         tokens.response = getChatGPTEncoding(
                             response,
                             tokenModel
@@ -284,7 +292,7 @@ export const callGPT = (options) => {
                         console.log(runners);
                         const error = runners.find(({ error }) => error)?.error;
 
-                        return [{ response, tokens, error }];
+                        return [{ response, tokens, error, history }];
                     }
                 })
             );
@@ -432,8 +440,9 @@ Augment this response.`,
         }),
         callGPT(options),
         map((responses) =>
-            responses.map(({ response, tokens, error }) => ({
+            responses.map(({ response, tokens, error, history }) => ({
                 type: "partial",
+                history,
                 messages: [thisMsg].concat(response),
                 error,
                 tokens,

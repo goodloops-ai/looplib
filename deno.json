@@ -8,7 +8,7 @@
         "zod-to-json-schema": "https://esm.sh/zod-to-json-schema",
         "zod": "https://esm.sh/zod",
         "uuid": "https://esm.sh/uuid",
-        "openai": "https://deno.land/x/openai@v4.26.1/mod.ts",
+        "openai": "https://esm.sh/gh/goodloops-ai/openai-node@c35c92f32328586bc4c46adeaaee8b34aa2573b6",
         "looplib/": "./",
         "schinquirer": "https://esm.sh/@luismayo/schinquirer",
         "filenamify": "https://esm.sh/filenamify",
